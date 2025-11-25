@@ -85,8 +85,9 @@ class JsonHParams:
         return self.__dict__.__repr__()
 
 
-def build_semantic_model(path_='./models/tts/maskgct/ckpt/wav2vec2bert_stats.pt'):
-    semantic_model = Wav2Vec2BertModel.from_pretrained("facebook/w2v-bert-2.0",cache_dir=os.path.join(folder_paths.models_dir,"indextts"))
+def build_semantic_model(path_='./models/tts/maskgct/ckpt/wav2vec2bert_stats.pt', local_files_only=False):
+    semantic_model = Wav2Vec2BertModel.from_pretrained("facebook/w2v-bert-2.0", local_files_only=local_files_only,
+                                                       cache_dir=os.path.join(folder_paths.models_dir, "indextts"))
     semantic_model.eval()
     stat_mean_var = torch.load(path_)
     semantic_mean = stat_mean_var["mean"]
@@ -128,7 +129,7 @@ class Inference_Pipeline():
             codec_decoder,
             s2a_model_1layer,
             s2a_model_full,
-            ):
+    ):
         self.semantic_model = semantic_model
         self.semantic_codec = semantic_codec
         self.semantic_mean = semantic_mean
@@ -166,12 +167,12 @@ class Inference_Pipeline():
 
     @torch.no_grad()
     def semantic2acoustic(
-        self,
-        combine_semantic_code,
-        acoustic_code,
-        n_timesteps=[25, 10, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-        cfg=2.5,
-        rescale_cfg=0.75,
+            self,
+            combine_semantic_code,
+            acoustic_code,
+            n_timesteps=[25, 10, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            cfg=2.5,
+            rescale_cfg=0.75,
     ):
         semantic_code = combine_semantic_code
 
@@ -215,13 +216,13 @@ class Inference_Pipeline():
         return combine_audio, recovered_audio
 
     def s2a_inference(
-        self,
-        prompt_speech_path,
-        combine_semantic_code,
-        cfg=2.5,
-        n_timesteps_s2a=[25, 10, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-        cfg_s2a=2.5,
-        rescale_cfg_s2a=0.75,
+            self,
+            prompt_speech_path,
+            combine_semantic_code,
+            cfg=2.5,
+            n_timesteps_s2a=[25, 10, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            cfg_s2a=2.5,
+            rescale_cfg_s2a=0.75,
     ):
         speech = librosa.load(prompt_speech_path, sr=24000)[0]
         acoustic_code = self.extract_acoustic_code(
@@ -239,9 +240,9 @@ class Inference_Pipeline():
 
     @torch.no_grad()
     def gt_inference(
-        self,
-        prompt_speech_path,
-        combine_semantic_code,
+            self,
+            prompt_speech_path,
+            combine_semantic_code,
     ):
         speech = librosa.load(prompt_speech_path, sr=24000)[0]
         '''
@@ -254,7 +255,8 @@ class Inference_Pipeline():
         )
         '''
 
-        prompt_vq_emb = self.codec_encoder(torch.tensor(speech).unsqueeze(0).unsqueeze(1).to(combine_semantic_code.device))
+        prompt_vq_emb = self.codec_encoder(
+            torch.tensor(speech).unsqueeze(0).unsqueeze(1).to(combine_semantic_code.device))
         recovered_prompt_audio = self.codec_decoder(prompt_vq_emb)
         recovered_prompt_audio = recovered_prompt_audio[0][0].cpu().numpy()
         return recovered_prompt_audio

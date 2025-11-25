@@ -2,7 +2,7 @@
 Bilibili的IndexTTs2的ComfyUI版本
 
 ## 使用
-自动加载模型节点会自动在comfyui下的 models文件夹下生成一个indextts文件夹，自动从huggingface下载模型
+自动加载模型节点，选择false会在comfyui下的 models文件夹下生成一个indextts文件夹，从huggingface下载模型；选择true则不会自动下载，仅在indextts文件夹下寻找模型
 
 音频组的生成可以指定说话人，格式为 名称:文案 ， 句间可以指定间隔，格式为 pause:时间
 

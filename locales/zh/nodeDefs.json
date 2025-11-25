@@ -2,6 +2,10 @@
   "AutoLoadModelNode": {
     "display_name": "自动加载模型",
     "inputs": {
+      "local_files_only": {
+        "name": "使用本地模型",
+        "tooltip": "开启则不下载，仅在本地查找模型; 关闭则自动下载并更新"
+      }
     },
     "outputs": {
       "0": {

@@ -13,7 +13,7 @@ class AutoLoadModelNode(io.ComfyNode):
             category="ComfyUI-Simple-IndexTTS",
             description="AutoLoadModel",
             inputs=[
-
+                io.Boolean.Input("local_files_only", default=False),
             ],
             outputs=[
                 io.Custom("IndexTTsModel").Output("IndexTTsModel"),
@@ -21,12 +21,14 @@ class AutoLoadModelNode(io.ComfyNode):
         )
 
     @classmethod
-    def execute(cls) -> io.NodeOutput:
+    def execute(cls, local_files_only) -> io.NodeOutput:
         model_dir = os.path.join(folder_paths.models_dir, "indextts")
         if not os.path.exists(model_dir):
             os.makedirs(model_dir)
         cfg_path = os.path.join(model_dir, "config.yaml")
         tts = IndexTTS2(cfg_path=cfg_path,
                         model_dir=model_dir,
-                        use_cuda_kernel=False)
+                        use_cuda_kernel=False,
+                        local_files_only=local_files_only
+                        )
         return io.NodeOutput(tts)
