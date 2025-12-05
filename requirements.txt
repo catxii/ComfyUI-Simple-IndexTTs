@@ -3,7 +3,7 @@ json5
 torch
 torchaudio
 huggingface_hub
-transformers<=4.53.0
+transformers <=4.75.1
 omegaconf
 einops
 descript-audiotools==0.7.2
