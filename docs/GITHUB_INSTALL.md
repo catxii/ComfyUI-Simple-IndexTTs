@@ -30,13 +30,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubus
 如果你要 CPU 安装：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $(irm https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install.ps1) } -TorchBackend cpu"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install.ps1'))) -TorchBackend cpu"
 ```
 
 如果你想先跳过模型下载：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& { $(irm https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install.ps1) } -SkipModelDownload"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm 'https://raw.githubusercontent.com/<OWNER>/<REPO>/main/scripts/install.ps1'))) -SkipModelDownload"
 ```
 
 ## 安装后启动

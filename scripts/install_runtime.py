@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -77,14 +78,20 @@ def create_venv(base_python: str, venv_dir: Path) -> Path:
     return venv_dir / "Scripts" / "python.exe"
 
 
-def build_filtered_requirements(source: Path, destination: Path, blocked_prefixes: tuple[str, ...]) -> Path:
+def extract_requirement_name(requirement: str) -> str:
+    normalized = requirement.strip()
+    match = re.match(r"^([A-Za-z0-9_.-]+)", normalized)
+    return (match.group(1).lower() if match else normalized.lower())
+
+
+def build_filtered_requirements(source: Path, destination: Path, blocked_names: tuple[str, ...]) -> Path:
     lines: list[str] = []
     for raw_line in source.read_text(encoding="utf-8").splitlines():
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        normalized = stripped.replace(" ", "").lower()
-        if any(normalized.startswith(prefix) for prefix in blocked_prefixes):
+        requirement_name = extract_requirement_name(stripped)
+        if requirement_name in blocked_names:
             continue
         lines.append(stripped)
     destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -96,14 +103,6 @@ def install_python_dependencies(source_dir: Path, install_dir: Path, venv_python
     comfy_dir = runtime_dir / "ComfyUI"
 
     run([str(venv_python), "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools"])
-
-    comfy_requirements = runtime_dir / "comfyui.requirements.filtered.txt"
-    build_filtered_requirements(
-        comfy_dir / "requirements.txt",
-        comfy_requirements,
-        ("torch", "torchaudio", "torchvision", "transformers"),
-    )
-    run([str(venv_python), "-m", "pip", "install", "-r", str(comfy_requirements)])
 
     if torch_backend == "cu128":
         run(
@@ -132,6 +131,14 @@ def install_python_dependencies(source_dir: Path, install_dir: Path, venv_python
             ]
         )
 
+    comfy_requirements = runtime_dir / "comfyui.requirements.filtered.txt"
+    build_filtered_requirements(
+        comfy_dir / "requirements.txt",
+        comfy_requirements,
+        ("torch", "torchaudio", "torchvision", "transformers"),
+    )
+    run([str(venv_python), "-m", "pip", "install", "-r", str(comfy_requirements)])
+
     plugin_requirements = runtime_dir / "plugin.requirements.filtered.txt"
     build_filtered_requirements(
         source_dir / "requirements.txt",
@@ -146,7 +153,7 @@ def install_plugin(source_dir: Path, install_dir: Path) -> None:
     plugin_target = install_dir / "_runtime" / "ComfyUI" / "custom_nodes" / "ComfyUI-Simple-IndexTTs"
     if plugin_target.exists():
         shutil.rmtree(plugin_target)
-    shutil.copytree(source_dir, plugin_target, dirs_exist_ok=True)
+    copy_repo(source_dir, plugin_target)
 
 
 def predownload_models(venv_python: Path, install_dir: Path) -> None:
