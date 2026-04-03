@@ -4,9 +4,15 @@ import random
 import re
 
 import folder_paths
+import soundfile as sf
 import torch
-import torchaudio
 from comfy_api.latest import ComfyExtension, io, ui
+
+
+def load_audio_file(audio_path):
+    waveform, sample_rate = sf.read(audio_path, dtype="float32", always_2d=True)
+    waveform = torch.from_numpy(waveform.T.copy())
+    return waveform, sample_rate
 
 
 class TTsNode(io.ComfyNode):
@@ -66,7 +72,7 @@ class TTsNode(io.ComfyNode):
                                     emo_alpha=emo_text_weight,
                                     emo_text=emo_text,
                                     verbose=True)
-        waveform, sample_rate = torchaudio.load(output_path)
+        waveform, sample_rate = load_audio_file(output_path)
         audio = {"waveform": waveform.unsqueeze(0), "sample_rate": sample_rate}
         return io.NodeOutput(audio, ui=ui.PreviewAudio(audio, cls=cls))
 
@@ -138,7 +144,7 @@ class BatchTTsNode(io.ComfyNode):
                                             emo_alpha=emo_text_weight,
                                             emo_text=emo_text,
                                             verbose=True)
-                    waveform, sample_rate = torchaudio.load(output_path)
+                    waveform, sample_rate = load_audio_file(output_path)
                     waveforms.append(waveform)
         result = torch.cat(waveforms, dim=1)
         audio = {"waveform": result.unsqueeze(0), "sample_rate": sample_rate}

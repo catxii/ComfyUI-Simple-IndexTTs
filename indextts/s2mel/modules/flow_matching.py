@@ -26,6 +26,7 @@ class BASECFM(torch.nn.Module, ABC):
             self.zero_prompt_speech_token = args.DiT.zero_prompt_speech_token
         else:
             self.zero_prompt_speech_token = False
+        self.progress_callback = None
 
     @torch.inference_mode()
     def inference(self, mu, x_lens, prompt, style, f0, n_timesteps, temperature=1.0, inference_cfg_rate=0.5):
@@ -108,6 +109,8 @@ class BASECFM(torch.nn.Module, ABC):
             x = x + dt * dphi_dt
             t = t + dt
             sol.append(x)
+            if callable(self.progress_callback):
+                self.progress_callback(step, len(t_span) - 1)
             if step < len(t_span) - 1:
                 dt = t_span[step + 1] - t
             x[:, :, :prompt_len] = 0

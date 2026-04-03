@@ -1,16 +1,77 @@
-import torch
-import librosa
-import json5
-from huggingface_hub import hf_hub_download
-from transformers import SeamlessM4TFeatureExtractor, Wav2Vec2BertModel
-import safetensors
-import numpy as np
 import os
+import time
+
 import folder_paths
+import json5
+import librosa
+import numpy as np
+import safetensors
+import torch
+from huggingface_hub import hf_hub_download, snapshot_download
+from transformers import SeamlessM4TFeatureExtractor, Wav2Vec2BertModel
+
 from .maskgct.models.codec.kmeans.repcodec_model import RepCodec
 from .maskgct.models.tts.maskgct.maskgct_s2a import MaskGCT_S2A
 from .maskgct.models.codec.amphion_codec.codec import CodecEncoder, CodecDecoder
-import time
+
+
+W2V_BERT_REPO_ID = "facebook/w2v-bert-2.0"
+W2V_BERT_REQUIRED_FILES = (
+    ".gitattributes",
+    "README.md",
+    "config.json",
+    "preprocessor_config.json",
+    "conformer_shaw.pt",
+    "model.safetensors",
+)
+
+
+def ensure_w2v_bert_snapshot(local_files_only=False):
+    cache_dir = os.path.join(folder_paths.models_dir, "indextts")
+    try:
+        model_path = snapshot_download(
+            repo_id=W2V_BERT_REPO_ID,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            resume_download=True,
+        )
+        missing_files = [
+            filename for filename in W2V_BERT_REQUIRED_FILES
+            if not os.path.exists(os.path.join(model_path, filename))
+        ]
+        if missing_files and local_files_only:
+            raise OSError(
+                f"{W2V_BERT_REPO_ID} is missing local files: {', '.join(missing_files)}. "
+                "Run AutoLoadModel once with local_files_only=False to complete the download."
+            )
+        for filename in missing_files:
+            hf_hub_download(
+                repo_id=W2V_BERT_REPO_ID,
+                filename=filename,
+                cache_dir=cache_dir,
+                local_files_only=local_files_only,
+                resume_download=True,
+            )
+        return snapshot_download(
+            repo_id=W2V_BERT_REPO_ID,
+            cache_dir=cache_dir,
+            local_files_only=True,
+            resume_download=True,
+        )
+    except Exception as exc:
+        if local_files_only:
+            raise OSError(
+                f"{W2V_BERT_REPO_ID} is not available in the local cache. "
+                "Run AutoLoadModel once with local_files_only=False to download it."
+            ) from exc
+        raise OSError(
+            f"Failed to download {W2V_BERT_REPO_ID}. Check your Hugging Face network access and try again."
+        ) from exc
+
+
+def build_w2v_feature_extractor(local_files_only=False):
+    model_path = ensure_w2v_bert_snapshot(local_files_only=local_files_only)
+    return SeamlessM4TFeatureExtractor.from_pretrained(model_path, local_files_only=True)
 
 
 def _load_config(config_fn, lowercase=False):
@@ -86,8 +147,8 @@ class JsonHParams:
 
 
 def build_semantic_model(path_='./models/tts/maskgct/ckpt/wav2vec2bert_stats.pt', local_files_only=False):
-    semantic_model = Wav2Vec2BertModel.from_pretrained("facebook/w2v-bert-2.0", local_files_only=local_files_only,
-                                                       cache_dir=os.path.join(folder_paths.models_dir, "indextts"))
+    model_path = ensure_w2v_bert_snapshot(local_files_only=local_files_only)
+    semantic_model = Wav2Vec2BertModel.from_pretrained(model_path, local_files_only=True)
     semantic_model.eval()
     stat_mean_var = torch.load(path_)
     semantic_mean = stat_mean_var["mean"]

@@ -3,7 +3,7 @@ name = "ComfyUI-Simple-IndexTTs"
 description = "Bilibili IndexTTS2 ComfyUI Version, for text to speech,Auto-downloads models, support multiple roles,simple to use. support transformers <4.57.1"
 version = "1.0.5"
 license = {file = "LICENSE"}
-dependencies = ["librosa", "json5", "torch", "torchaudio", "huggingface_hub", "transformers<=4.57.1", "omegaconf", "einops", "descript-audiotools==0.7.2", "tokenizer", "eval", "munch", "accelerate", "wetext"]
+dependencies = ["librosa", "json5", "torch<2.10", "torchaudio<2.10", "huggingface_hub", "transformers<=4.57.1", "omegaconf", "einops", "descript-audiotools==0.7.2", "tokenizer", "eval", "munch", "accelerate", "wetext"]
 
 [project.urls]
 Repository = "https://github.com/NewNoviceChen/ComfyUI-Simple-IndexTTs"

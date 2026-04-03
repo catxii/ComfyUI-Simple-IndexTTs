@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IndexTTS 控制台</title>
+  <link rel="stylesheet" href="/indextts-ui/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">ComfyUI Simple IndexTTS</p>
+        <h1>剧情对白工作台</h1>
+        <p class="subtitle">把角色、情绪、台词和音频输出集中到一个页面里，减少在节点图里反复拖线。</p>
+      </div>
+      <div class="hero-actions">
+        <button id="openSettingsBtn" class="secondary hero-settings-btn" type="button">设置</button>
+      </div>
+    </header>
+
+    <section class="toolbar card">
+      <div class="toolbar-row">
+        <span class="toolbar-label">内容管理</span>
+        <button id="openProjectManagerBtn" class="secondary">项目管理</button>
+        <button id="addLineBtn" class="primary">添加台词</button>
+        <button id="clearCurrentDialoguesBtn" class="secondary">清空当前对白</button>
+        <button id="insertDemoBtn" class="secondary">插入示例</button>
+        <input id="importInput" type="file" accept="application/json" hidden>
+      </div>
+      <div class="toolbar-row">
+        <span class="toolbar-label">音频管理</span>
+        <button id="generateAllBtn" class="primary">批量生成音频</button>
+        <div class="merge-button-group">
+          <button id="mergeBtn" class="secondary" type="button">合并音频</button>
+          <button id="openMergedAudiosBtn" class="secondary merge-menu-btn" type="button" title="打开合并音频下载列表" aria-label="打开合并音频下载列表">▾</button>
+        </div>
+        <button id="clearOutputsBtn" class="secondary danger-soft">清空生成结果</button>
+      </div>
+      <div id="mergeProgressPanel" class="merge-progress-panel hidden">
+        <div class="merge-progress-head">
+          <strong id="mergeProgressTitle">正在合并音频</strong>
+          <span id="mergeProgressText">0%</span>
+        </div>
+        <div class="merge-progress-bar">
+          <span id="mergeProgressFill"></span>
+        </div>
+        <p id="mergeProgressDescription">准备合并音频...</p>
+      </div>
+    </section>
+
+    <main class="layout">
+      <section class="card stage">
+        <div class="section-head">
+          <div>
+            <div class="project-title-wrap">
+              <h2 id="currentProjectTitle" class="project-title-display" title="双击修改项目名">未命名</h2>
+              <input id="currentProjectTitleInput" class="project-title-input hidden" type="text" maxlength="40" placeholder="输入项目名称">
+              <button id="saveWorkspaceBtn" class="secondary project-save-btn" type="button">保存</button>
+            </div>
+            <p id="projectSaveStatus" class="project-save-status">最后保存：未保存</p>
+            <p>每条台词都可以单独试听，也可以整段批量生成后再合并。</p>
+          </div>
+          <div class="hint" id="lineCountHint">0 条台词</div>
+        </div>
+        <div id="lineList" class="line-list"></div>
+      </section>
+
+      <aside class="card roles">
+        <div class="section-head">
+          <div>
+            <h2>角色列表</h2>
+            <p>为每个角色绑定一段参考音频，默认情绪也可以单独配置。</p>
+          </div>
+          <button id="addRoleBtn" class="primary panel-action-btn panel-action-btn-add" type="button">
+            <span class="panel-action-icon" aria-hidden="true">✦</span>
+            <span class="panel-action-label">添加角色</span>
+          </button>
+        </div>
+        <div id="roleList" class="role-list"></div>
+      </aside>
+    </main>
+
+    <section id="mergeResultCard" class="card merge-card hidden">
+      <div class="section-head">
+        <div>
+          <h2>合并结果</h2>
+          <p id="mergeResultMeta">整段音频已生成。</p>
+        </div>
+      </div>
+      <audio id="mergeResultAudio" controls></audio>
+      <a id="mergeResultDownload" class="secondary download-link" download>下载合并音频</a>
+    </section>
+  </div>
+
+  <template id="roleTemplate">
+    <article class="role-item">
+      <div class="role-top">
+        <input class="role-name" type="text" placeholder="角色名">
+        <button class="icon danger remove-role" title="删除角色">×</button>
+      </div>
+      <div class="role-meta">
+        <label class="audio-upload secondary">
+          <input class="role-audio-input" type="file" accept="audio/*" hidden>
+          上传参考音频
+        </label>
+        <span class="role-audio-name">未上传音频</span>
+      </div>
+            <div class="role-meta">
+              <label class="inline-field grow">
+                <span>默认情绪</span>
+                <select class="role-default-emotion"></select>
+              </label>
+              <button class="secondary sync-role-emotion" type="button">同步到对白</button>
+            </div>
+          </article>
+        </template>
+
+  <template id="lineTemplate">
+    <article class="line-item">
+      <div class="line-top">
+        <button class="icon add-before" title="在上方插入">+</button>
+        <select class="line-role"></select>
+        <select class="line-emotion-mode">
+          <option value="preset">预设情绪</option>
+          <option value="text">自定义情绪</option>
+        </select>
+        <select class="line-emotion"></select>
+        <input class="line-emotion-text line-emotion-text-inline hidden" type="text" placeholder="渚嬪锛氱棝鑻︺€佸帇鎶戙€佸厠鍒?>
+        <div class="line-actions">
+          <button class="icon action-icon generate-line" title="生成或播放">▶</button>
+          <button class="icon action-icon duplicate-line" title="复制">⧉</button>
+          <a class="icon action-icon download-line hidden" title="下载" download>↓</a>
+          <button class="icon danger remove-line" title="删除">×</button>
+        </div>
+      </div>
+      <div class="line-input-stack">
+        <input class="line-emotion-text hidden" type="text" placeholder="例如：压抑、克制、隐忍">
+        <textarea class="line-text" rows="2" placeholder="输入要生成的对白内容"></textarea>
+      </div>
+      <div class="line-footer">
+        <span class="line-status">未生成</span>
+        <audio class="line-audio hidden" controls></audio>
+      </div>
+    </article>
+  </template>
+
+  <div id="toast" class="toast hidden"></div>
+  <button id="taskDock" class="task-dock hidden" type="button" title="定位到正在执行的任务">
+    <div class="task-dock-head">
+      <strong id="taskDockTitle">有任务执行中</strong>
+      <span id="taskDockCount" class="task-dock-count">1</span>
+    </div>
+    <div id="taskDockProgress" class="task-dock-progress">0.0%</div>
+    <div id="taskDockDescription" class="task-dock-description">点击定位到当前任务</div>
+  </button>
+
+  <div id="downloadListModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="download-list"></div>
+    <div class="modal-panel modal-panel-narrow" role="dialog" aria-modal="true" aria-labelledby="downloadListTitle">
+      <div class="modal-head">
+        <div>
+          <h3 id="downloadListTitle">下载列表</h3>
+          <p>这里会列出合成后的 wav，以及当前已生成的单条音频。</p>
+        </div>
+        <button id="closeDownloadListModalBtn" class="icon" type="button" title="关闭">×</button>
+      </div>
+      <div id="downloadListBody" class="download-list"></div>
+    </div>
+  </div>
+
+  <div id="mergedAudiosModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="merged-audios"></div>
+    <div class="modal-panel modal-panel-narrow" role="dialog" aria-modal="true" aria-labelledby="mergedAudiosTitle">
+      <div class="modal-head">
+        <div>
+          <h3 id="mergedAudiosTitle">下载合并音频</h3>
+          <p>这里会列出当前已经合并成功的所有音频文件。</p>
+        </div>
+        <button id="closeMergedAudiosModalBtn" class="icon" type="button" title="关闭">×</button>
+      </div>
+      <div id="mergedAudiosBody" class="download-list"></div>
+    </div>
+  </div>
+
+  <div id="projectManagerModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="project-manager"></div>
+    <div class="modal-panel modal-panel-narrow" role="dialog" aria-modal="true" aria-labelledby="projectManagerTitle">
+      <div class="modal-head">
+        <div>
+          <h3 id="projectManagerTitle">项目管理</h3>
+          <p>这里可以打开和管理本地保存过的对白项目，也能处理当前项目。</p>
+        </div>
+        <button id="closeProjectManagerModalBtn" class="icon" type="button" title="关闭">×</button>
+      </div>
+      <div class="project-manager-actions">
+        <button id="saveCurrentProjectBtn" class="secondary" type="button">保存当前项目</button>
+        <button id="importBtn" class="secondary" type="button">导入项目</button>
+        <button id="exportBtn" class="secondary" type="button">导出项目</button>
+        <button id="closeCurrentProjectBtn" class="secondary" type="button">关闭当前项目</button>
+      </div>
+      <div id="projectManagerList" class="project-list"></div>
+    </div>
+  </div>
+
+  <div id="saveProjectModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="save-project"></div>
+    <div class="modal-panel modal-panel-narrow" role="dialog" aria-modal="true" aria-labelledby="saveProjectTitle">
+      <div class="modal-head">
+        <div>
+          <h3 id="saveProjectTitle">保存当前项目</h3>
+          <p>当前项目还没有名称，先输入一个项目名再保存。</p>
+        </div>
+        <button id="closeSaveProjectModalBtn" class="icon" type="button" title="关闭">×</button>
+      </div>
+      <div class="field-stack">
+        <span>项目名称</span>
+        <input id="saveProjectNameInput" type="text" maxlength="40" placeholder="例如：第一章对白">
+      </div>
+      <div class="modal-actions">
+        <button id="cancelSaveProjectBtn" class="secondary" type="button">取消</button>
+        <button id="confirmSaveProjectBtn" class="primary" type="button">保存项目</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="scriptImportModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="script-import"></div>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="scriptImportTitle">
+      <div class="modal-head">
+        <div>
+          <h3 id="scriptImportTitle">快速导入对白</h3>
+          <p>每行一个角色和一句台词，格式：李白|你好啊</p>
+        </div>
+        <button id="closeScriptImportModalBtn" class="icon" type="button" title="关闭">×</button>
+      </div>
+      <textarea
+        id="scriptInput"
+        class="script-input modal-script-input"
+        rows="8"
+        placeholder="李白|你好啊&#10;小天|我好嗯好啊"
+      ></textarea>
+      <div class="modal-actions">
+        <button id="quickAddLineBtn" class="secondary" type="button">新增空白台词</button>
+        <button id="importScriptBtn" class="primary" type="button">拆分加入时间线</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settingsModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="settings"></div>
+    <div class="modal-panel modal-panel-narrow settings-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modal-head">
+        <div>
+          <h3 id="settingsTitle">设置</h3>
+          <p>把常用参数和工具动作收在这里，主页面会更清爽一些。</p>
+        </div>
+        <button id="closeSettingsModalBtn" class="icon" type="button" title="关闭">×</button>
+      </div>
+
+      <section class="settings-section">
+        <div class="settings-section-head">
+          <h4>生成设置</h4>
+          <p>这些配置会用于单条生成、批量生成和合并音频。</p>
+        </div>
+        <div class="settings-grid">
+          <label class="toggle settings-toggle">
+            <input id="localFilesOnly" type="checkbox">
+            <span>仅使用本地缓存模型</span>
+          </label>
+          <label class="field-stack">
+            <span>输出前缀</span>
+            <input id="outputPrefix" type="text" maxlength="30" placeholder="indextts_ui">
+          </label>
+          <label class="field-stack">
+            <span>合并停顿</span>
+            <div class="inline-field inline-field-box">
+              <input id="mergeSilenceMs" type="number" min="0" max="5000" step="50">
+              <em>ms</em>
+            </div>
+          </label>
+          <label class="field-stack slider-field">
+            <div class="slider-head">
+              <span>闊抽噺</span>
+              <strong id="volumeValue">100%</strong>
+            </div>
+            <input id="volume" type="range" min="0" max="200" step="1">
+          </label>
+          <label class="field-stack slider-field">
+            <div class="slider-head">
+              <span>闊宠皟</span>
+              <strong id="pitchValue">0</strong>
+            </div>
+            <input id="pitch" type="range" min="-12" max="12" step="1">
+          </label>
+          <label class="field-stack slider-field">
+            <div class="slider-head">
+              <span>璇€?</span>
+              <strong id="speedValue">1.00x</strong>
+            </div>
+            <input id="speed" type="range" min="50" max="150" step="1">
+          </label>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <div class="settings-section-head">
+          <h4>关于</h4>
+          <p>快速进入 ComfyUI，或者先预热模型再开始工作。</p>
+        </div>
+        <div class="about-card">
+          <div>
+            <strong>ComfyUI Simple IndexTTS</strong>
+            <p>剧情对白工作台，把角色、情绪、台词和音频输出集中在同一页处理。</p>
+          </div>
+          <div class="about-actions">
+            <button id="loadModelBtn" class="primary ghost" type="button">预热模型</button>
+            <a class="link-chip" href="http://127.0.0.1:8191" target="_blank" rel="noreferrer">打开 ComfyUI</a>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <div id="pronunciationModal" class="modal hidden" aria-hidden="true">
+    <div class="modal-backdrop" data-close-modal="pronunciation"></div>
+    <div class="modal-panel modal-panel-narrow" role="dialog" aria-modal="true" aria-labelledby="pronunciationTitle">
+      <div class="modal-head">
+        <div>
+          <h3 id="pronunciationTitle">发音设置</h3>
+          <p>每行一条，格式：原词|pin1 yin1。数字读法可单独设置为逐位朗读，例如 1990 -> 一九九零。</p>
+        </div>
+        <button id="closePronunciationModalBtn" class="icon" type="button" title="关闭">×</button>
+      </div>
+      <div class="field-stack">
+        <span>当前台词</span>
+        <div id="pronunciationPreview" class="pronunciation-preview">未选择台词</div>
+      </div>
+      <div class="field-stack">
+        <span>单字快捷加入</span>
+        <div id="pronunciationCharList" class="pronunciation-char-list"></div>
+      </div>
+      <div class="field-stack">
+        <span>发音字典</span>
+        <textarea id="pronunciationInput" rows="8" placeholder="哪吒|na2 zha1&#10;呢|ne5"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button id="clearPronunciationBtn" class="secondary" type="button">清空</button>
+        <button id="cancelPronunciationBtn" class="secondary" type="button">取消</button>
+        <button id="savePronunciationBtn" class="primary" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+  <script src="/indextts-ui/app.js"></script>
+</body>
+</html>

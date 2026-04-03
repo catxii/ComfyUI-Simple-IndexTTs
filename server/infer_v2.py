@@ -5,6 +5,7 @@ import json
 import re
 import time
 import librosa
+import soundfile as sf
 import torch
 import torchaudio
 from huggingface_hub import hf_hub_download, snapshot_download
@@ -18,7 +19,11 @@ warnings.filterwarnings("ignore", category=UserWarning)
 from omegaconf import OmegaConf
 
 from ..indextts.gpt.model_v2 import UnifiedVoice
-from ..indextts.utils.maskgct_utils import build_semantic_model, build_semantic_codec
+from ..indextts.utils.maskgct_utils import (
+    build_semantic_codec,
+    build_semantic_model,
+    build_w2v_feature_extractor,
+)
 from ..indextts.utils.checkpoint import load_checkpoint
 from ..indextts.utils.front import TextNormalizer, TextTokenizer
 from ..indextts.s2mel.modules.commons import load_checkpoint2, MyModel
@@ -29,11 +34,47 @@ from ..indextts.s2mel.modules.audio import mel_spectrogram
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 import safetensors
-from transformers import SeamlessM4TFeatureExtractor
 import random
 import torch.nn.functional as F
 
 os.environ['HF_HUB_CACHE'] = os.path.join(folder_paths.models_dir, "indextts")
+
+
+def ensure_hf_file(repo_id, filename, local_files_only=False):
+    cache_dir = os.path.join(folder_paths.models_dir, "indextts")
+    try:
+        return hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            local_files_only=local_files_only,
+            cache_dir=cache_dir,
+            resume_download=True,
+        )
+    except Exception as exc:
+        if local_files_only:
+            raise OSError(
+                f"Missing cached file for {repo_id}: {filename}. "
+                "Run AutoLoadModel once with local_files_only=False to download it."
+            ) from exc
+        raise
+
+
+def ensure_hf_snapshot(repo_id, local_files_only=False):
+    cache_dir = os.path.join(folder_paths.models_dir, "indextts")
+    try:
+        return snapshot_download(
+            repo_id=repo_id,
+            cache_dir=cache_dir,
+            local_files_only=local_files_only,
+            resume_download=True,
+        )
+    except Exception as exc:
+        if local_files_only:
+            raise OSError(
+                f"Missing cached snapshot for {repo_id}. "
+                "Run AutoLoadModel once with local_files_only=False to download it."
+            ) from exc
+        raise
 
 
 class IndexTTS2:
@@ -115,10 +156,7 @@ class IndexTTS2:
                 print(f"{e!r}")
                 self.use_cuda_kernel = False
 
-        self.extract_features = SeamlessM4TFeatureExtractor.from_pretrained("facebook/w2v-bert-2.0",
-                                                                            local_files_only=local_files_only,
-                                                                            cache_dir=os.path.join(
-                                                                                folder_paths.models_dir, "indextts"))
+        self.extract_features = build_w2v_feature_extractor(local_files_only=local_files_only)
         self.semantic_model, self.semantic_mean, self.semantic_std = build_semantic_model(
             os.path.join(self.model_dir, self.cfg.w2v_stat), local_files_only)
         self.semantic_model = self.semantic_model.to(self.device)
@@ -127,10 +165,11 @@ class IndexTTS2:
         self.semantic_std = self.semantic_std.to(self.device)
 
         semantic_codec = build_semantic_codec(self.cfg.semantic_codec)
-        semantic_code_ckpt = hf_hub_download(repo_id="amphion/MaskGCT",
-                                             filename="semantic_codec/model.safetensors",
-                                             local_files_only=local_files_only,
-                                             cache_dir=os.path.join(folder_paths.models_dir, "indextts"))
+        semantic_code_ckpt = ensure_hf_file(
+            repo_id="amphion/MaskGCT",
+            filename="semantic_codec/model.safetensors",
+            local_files_only=local_files_only,
+        )
         safetensors.torch.load_model(semantic_codec, semantic_code_ckpt)
         self.semantic_codec = semantic_codec.to(self.device)
         self.semantic_codec.eval()
@@ -152,10 +191,11 @@ class IndexTTS2:
         print(">> s2mel weights restored from:", s2mel_path)
 
         # load campplus_model
-        campplus_ckpt_path = hf_hub_download(repo_id="funasr/campplus",
-                                             filename="campplus_cn_common.bin",
-                                             local_files_only=local_files_only,
-                                             cache_dir=os.path.join(folder_paths.models_dir, "indextts"))
+        campplus_ckpt_path = ensure_hf_file(
+            repo_id="funasr/campplus",
+            filename="campplus_cn_common.bin",
+            local_files_only=local_files_only,
+        )
         campplus_model = CAMPPlus(feat_dim=80, embedding_size=192)
         campplus_model.load_state_dict(torch.load(campplus_ckpt_path, map_location="cpu"))
         self.campplus_model = campplus_model.to(self.device)
@@ -163,6 +203,7 @@ class IndexTTS2:
         print(">> campplus_model weights restored from:", campplus_ckpt_path)
 
         bigvgan_name = self.cfg.vocoder.name
+        ensure_hf_snapshot(bigvgan_name, local_files_only=local_files_only)
         self.bigvgan = bigvgan.BigVGAN.from_pretrained(bigvgan_name, use_cuda_kernel=self.use_cuda_kernel,
                                                        local_files_only=local_files_only,
                                                        cache_dir=os.path.join(folder_paths.models_dir, "indextts"))
@@ -431,6 +472,7 @@ class IndexTTS2:
             emo_alpha = 1.0
 
         # 如果参考音频改变了，才需要重新生成, 提升速度
+        self._set_gr_progress(0.03, "analyzing reference audio...")
         if self.cache_spk_cond is None or is_tensor_equal(self.cache_spk_audio_prompt, spk_audio_prompt):
             if self.cache_spk_cond is not None:
                 self.cache_spk_cond = None
@@ -489,6 +531,7 @@ class IndexTTS2:
             emovec_mat = torch.sum(emovec_mat, 0)
             emovec_mat = emovec_mat.unsqueeze(0)
 
+        self._set_gr_progress(0.08, "analyzing emotion prompt...")
         if self.cache_emo_cond is None or is_tensor_equal(self.cache_emo_audio_prompt, emo_audio_prompt):
             if self.cache_emo_cond is not None:
                 self.cache_emo_cond = None
@@ -507,7 +550,7 @@ class IndexTTS2:
         else:
             emo_cond_emb = self.cache_emo_cond
 
-        self._set_gr_progress(0.1, "text processing...")
+        self._set_gr_progress(0.12, "text processing...")
         text_tokens_list = self.tokenizer.tokenize(text)
         segments = self.tokenizer.split_segments(text_tokens_list, max_text_tokens_per_segment,
                                                  quick_streaming_tokens=quick_streaming_tokens)
@@ -532,6 +575,7 @@ class IndexTTS2:
         temperature = generation_kwargs.pop("temperature", 0.8)
         autoregressive_batch_size = 1
         length_penalty = generation_kwargs.pop("length_penalty", 0.0)
+        # Default back to the higher-quality decode settings.
         num_beams = generation_kwargs.pop("num_beams", 3)
         repetition_penalty = generation_kwargs.pop("repetition_penalty", 10.0)
         max_mel_tokens = generation_kwargs.pop("max_mel_tokens", 1500)
@@ -544,9 +588,12 @@ class IndexTTS2:
         bigvgan_time = 0
         has_warned = False
         silence = None  # for stream_return
+        segment_progress_start = 0.2
+        segment_progress_span = 0.68
         for seg_idx, sent in enumerate(segments):
-            self._set_gr_progress(0.2 + 0.7 * seg_idx / segments_count,
-                                  f"speech synthesis {seg_idx + 1}/{segments_count}...")
+            seg_base = segment_progress_start + segment_progress_span * seg_idx / segments_count
+            seg_step = segment_progress_span / segments_count
+            self._set_gr_progress(seg_base, f"speech synthesis {seg_idx + 1}/{segments_count}...")
 
             text_tokens = self.tokenizer.convert_tokens_to_ids(sent)
             text_tokens = torch.tensor(text_tokens, dtype=torch.int32, device=self.device).unsqueeze(0)
@@ -560,6 +607,10 @@ class IndexTTS2:
             m_start_time = time.perf_counter()
             with torch.no_grad():
                 with torch.amp.autocast(text_tokens.device.type, enabled=self.dtype is not None, dtype=self.dtype):
+                    self._set_gr_progress(
+                        seg_base + seg_step * 0.15,
+                        f"gpt generation {seg_idx + 1}/{segments_count}...",
+                    )
                     emovec = self.gpt.merge_emovec(
                         spk_cond_emb,
                         emo_cond_emb,
@@ -644,6 +695,11 @@ class IndexTTS2:
                 dtype = None
                 with torch.amp.autocast(text_tokens.device.type, enabled=dtype is not None, dtype=dtype):
                     m_start_time = time.perf_counter()
+                    self._set_gr_progress(
+                        seg_base + seg_step * 0.55,
+                        f"acoustic decoding {seg_idx + 1}/{segments_count}...",
+                    )
+                    # Default back to the higher-quality diffusion setting.
                     diffusion_steps = 25
                     inference_cfg_rate = 0.7
                     latent = self.s2mel.models['gpt_layer'](latent)
@@ -657,15 +713,34 @@ class IndexTTS2:
                                                                  n_quantizers=3,
                                                                  f0=None)[0]
                     cat_condition = torch.cat([prompt_condition, cond], dim=1)
-                    vc_target = self.s2mel.models['cfm'].inference(cat_condition,
-                                                                   torch.LongTensor([cat_condition.size(1)]).to(
-                                                                       cond.device),
-                                                                   ref_mel, style, None, diffusion_steps,
-                                                                   inference_cfg_rate=inference_cfg_rate)
+                    cfm_model = self.s2mel.models['cfm']
+
+                    def on_cfm_progress(step_idx, total_steps):
+                        total = max(int(total_steps), 1)
+                        ratio = max(0.0, min(1.0, float(step_idx) / float(total)))
+                        self._set_gr_progress(
+                            seg_base + seg_step * (0.55 + 0.30 * ratio),
+                            f"acoustic decoding {seg_idx + 1}/{segments_count}... {step_idx}/{total}",
+                        )
+
+                    previous_cfm_progress = getattr(cfm_model, "progress_callback", None)
+                    cfm_model.progress_callback = on_cfm_progress
+                    try:
+                        vc_target = cfm_model.inference(cat_condition,
+                                                        torch.LongTensor([cat_condition.size(1)]).to(
+                                                            cond.device),
+                                                        ref_mel, style, None, diffusion_steps,
+                                                        inference_cfg_rate=inference_cfg_rate)
+                    finally:
+                        cfm_model.progress_callback = previous_cfm_progress
                     vc_target = vc_target[:, :, ref_mel.size(-1):]
                     s2mel_time += time.perf_counter() - m_start_time
 
                     m_start_time = time.perf_counter()
+                    self._set_gr_progress(
+                        seg_base + seg_step * 0.85,
+                        f"vocoder {seg_idx + 1}/{segments_count}...",
+                    )
                     wav = self.bigvgan(vc_target.float()).squeeze().unsqueeze(0)
                     print(wav.shape)
                     bigvgan_time += time.perf_counter() - m_start_time
@@ -684,7 +759,7 @@ class IndexTTS2:
                     yield silence
         end_time = time.perf_counter()
 
-        self._set_gr_progress(0.9, "saving audio...")
+        self._set_gr_progress(0.92, "saving audio...")
         wavs = self.insert_interval_silence(wavs, sampling_rate=sampling_rate, interval_silence=interval_silence)
         wav = torch.cat(wavs, dim=1)
         wav_length = wav.shape[-1] / sampling_rate
@@ -705,12 +780,20 @@ class IndexTTS2:
                 print(">> remove old wav file:", output_path)
             if os.path.dirname(output_path) != "":
                 os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            torchaudio.save(output_path, wav.type(torch.int16), sampling_rate)
+            sf.write(
+                output_path,
+                wav.type(torch.int16).squeeze(0).numpy(),
+                sampling_rate,
+                format="FLAC",
+                subtype="PCM_16",
+            )
             print(">> wav file saved to:", output_path)
+            self._set_gr_progress(1.0, "completed")
             if stream_return:
                 return None
             yield output_path
         else:
+            self._set_gr_progress(1.0, "completed")
             if stream_return:
                 return None
             # 返回以符合Gradio的格式要求

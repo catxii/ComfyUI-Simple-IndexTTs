@@ -2,6 +2,7 @@ from comfy_api.latest import ComfyExtension, io
 from .nodes.autoLoadModel import AutoLoadModelNode
 from .nodes.ttsByAudio import TTsNode, BatchTTsNode
 from .nodes.emotions import EmotionFromAudioNode, EmotionFromTensorNode, EmotionFromTextNode, MergeEmotionNode
+from .server import webui as _webui
 
 
 class MyExtension(ComfyExtension):
