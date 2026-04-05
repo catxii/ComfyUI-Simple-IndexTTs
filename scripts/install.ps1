@@ -2,7 +2,7 @@ param(
     [string]$RepoOwner = "catxii",
     [string]$RepoName = "ComfyUI-Simple-IndexTTs",
     [string]$Branch = "main",
-    [string]$InstallDir = "$env:LOCALAPPDATA\Programs\ComfyUI-Simple-IndexTTs",
+    [string]$InstallDir = "D:\ComfyUI-Simple-IndexTTs",
     [ValidateSet("cu128", "cpu")]
     [string]$TorchBackend = "cu128",
     [switch]$SkipModelDownload

@@ -212,7 +212,7 @@ def create_manifest() -> None:
     manifest = {
         "productName": PRODUCT_NAME,
         "version": VERSION,
-        "defaultInstallDir": r"%LOCALAPPDATA%\Programs\ComfyUI-Simple-IndexTTs",
+        "defaultInstallDir": r"D:\ComfyUI-Simple-IndexTTs",
         "launcherRelativePath": "Start Simple IndexTTS.cmd",
         "stopRelativePath": "Stop Simple IndexTTS.cmd",
         "webUiUrl": "http://127.0.0.1:8191/indextts-ui",

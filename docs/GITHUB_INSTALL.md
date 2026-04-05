@@ -49,5 +49,5 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create
 默认安装目录：
 
 ```text
-%LOCALAPPDATA%\Programs\ComfyUI-Simple-IndexTTs
+D:\ComfyUI-Simple-IndexTTs
 ```
