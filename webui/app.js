@@ -18,6 +18,20 @@
   currentProjectId: "",
   currentProjectName: "",
   lastSavedAt: "",
+  lanShare: {
+    enabled: false,
+    url: "",
+    ips: [],
+    port: 8192,
+    error: "",
+  },
+  auth: {
+    requireAuth: false,
+    authenticated: false,
+    username: "",
+    isOwner: false,
+    mode: "login",
+  },
 };
 
 const GENERATION_POLL_INTERVAL_MS = 600;
@@ -75,6 +89,21 @@ const els = {
   importBtn: document.querySelector("#importBtn"),
   importInput: document.querySelector("#importInput"),
   openSettingsBtn: document.querySelector("#openSettingsBtn"),
+  toggleLanShareBtn: null,
+  lanShareMeta: null,
+  lanShareLink: null,
+  copyLanShareBtn: null,
+  authEntryBtn: null,
+  authLogoutEntryBtn: null,
+  authModal: null,
+  closeAuthModalBtn: null,
+  authTitle: null,
+  authHint: null,
+  authUsername: null,
+  authPassword: null,
+  authSubmitBtn: null,
+  authSwitchBtn: null,
+  authLogoutBtn: null,
   loadModelBtn: document.querySelector("#loadModelBtn"),
   scriptImportModal: document.querySelector("#scriptImportModal"),
   closeScriptImportModalBtn: document.querySelector("#closeScriptImportModalBtn"),
@@ -363,6 +392,280 @@ function ensureToolbarButtons() {
   els.generateMissingBtn = button;
 }
 
+function ensureLanShareUI() {
+  if (els.toggleLanShareBtn || !els.settingsModal) return;
+  const settingsPanel = els.settingsModal.querySelector(".settings-panel");
+  if (!settingsPanel) return;
+
+  const panel = document.createElement("section");
+  panel.className = "settings-section lan-share-settings-section";
+  panel.innerHTML = `
+    <div class="settings-section-head">
+      <h4>局域网共享</h4>
+      <p>开启后，同一局域网内的用户可以访问这台电脑上的网页和音频生成服务。</p>
+    </div>
+    <div class="lan-share-panel settings-lan-share-panel">
+      <button id="toggleLanShareBtn" class="secondary hero-share-btn" type="button">开启局域网共享</button>
+      <div id="lanShareMeta" class="lan-share-meta hidden">
+        <a id="lanShareLink" class="lan-share-link" href="#" target="_blank" rel="noreferrer noopener"></a>
+        <button id="copyLanShareBtn" class="secondary lan-share-copy-btn" type="button">复制地址</button>
+      </div>
+    </div>
+  `;
+  const aboutSection = Array.from(settingsPanel.querySelectorAll(".settings-section"))
+    .find((section) => section.querySelector(".about-card"));
+  settingsPanel.insertBefore(panel, aboutSection || null);
+
+  els.toggleLanShareBtn = panel.querySelector("#toggleLanShareBtn");
+  els.lanShareMeta = panel.querySelector("#lanShareMeta");
+  els.lanShareLink = panel.querySelector("#lanShareLink");
+  els.copyLanShareBtn = panel.querySelector("#copyLanShareBtn");
+}
+
+function ensureAuthUI() {
+  if (els.authModal) return;
+  const modal = document.createElement("div");
+  modal.id = "authModal";
+  modal.className = "modal hidden";
+  modal.setAttribute("aria-hidden", "true");
+  modal.innerHTML = `
+    <div class="modal-backdrop" data-close-modal="auth"></div>
+    <div class="modal-panel modal-panel-narrow" role="dialog" aria-modal="true" aria-labelledby="authTitle">
+      <div class="modal-head">
+        <div>
+          <h3 id="authTitle">登录局域网账户</h3>
+          <p id="authHint">局域网用户需要先注册或登录，数据会保存在这台电脑本地。</p>
+        </div>
+        <button id="closeAuthModalBtn" class="icon" type="button" title="关闭">×</button>
+      </div>
+      <div class="field-stack">
+        <span>用户名</span>
+        <input id="authUsername" type="text" maxlength="40" placeholder="输入用户名">
+      </div>
+      <div class="field-stack">
+        <span>密码</span>
+        <input id="authPassword" type="password" maxlength="128" placeholder="输入密码">
+      </div>
+      <div class="modal-actions auth-actions">
+        <button id="authSwitchBtn" class="secondary" type="button">没有账号？去注册</button>
+        <button id="authSubmitBtn" class="primary" type="button">登录</button>
+      </div>
+      <div class="modal-actions auth-actions auth-actions-logout hidden" id="authLogoutRow">
+        <button id="authLogoutBtn" class="secondary danger-soft" type="button">退出登录</button>
+      </div>
+    </div>
+  `;
+  document.body.append(modal);
+
+  els.authModal = modal;
+  els.closeAuthModalBtn = modal.querySelector("#closeAuthModalBtn");
+  els.authTitle = modal.querySelector("#authTitle");
+  els.authHint = modal.querySelector("#authHint");
+  els.authUsername = modal.querySelector("#authUsername");
+  els.authPassword = modal.querySelector("#authPassword");
+  els.authSubmitBtn = modal.querySelector("#authSubmitBtn");
+  els.authSwitchBtn = modal.querySelector("#authSwitchBtn");
+  els.authLogoutBtn = modal.querySelector("#authLogoutBtn");
+  els.authLogoutRow = modal.querySelector("#authLogoutRow");
+}
+
+function ensureAuthEntryUI() {
+  if (els.authEntryBtn || !els.openSettingsBtn) return;
+  const heroActions = els.openSettingsBtn.parentElement;
+  if (!heroActions) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "hero-auth-entry";
+  wrap.innerHTML = `
+    <button id="authEntryBtn" class="secondary hero-account-btn" type="button">账户</button>
+    <button id="authLogoutEntryBtn" class="secondary danger-soft hero-account-logout hidden" type="button">退出登录</button>
+  `;
+  heroActions.insertBefore(wrap, els.openSettingsBtn);
+
+  els.authEntryBtn = wrap.querySelector("#authEntryBtn");
+  els.authLogoutEntryBtn = wrap.querySelector("#authLogoutEntryBtn");
+}
+
+function openAuthModal() {
+  ensureAuthUI();
+  renderAuthState();
+  els.authModal.classList.remove("hidden");
+  els.authModal.setAttribute("aria-hidden", "false");
+  syncBodyModalLock();
+  requestAnimationFrame(() => {
+    if (!state.auth.authenticated) {
+      els.authUsername.focus();
+    }
+  });
+}
+
+function closeAuthModal() {
+  if (!els.authModal) return;
+  if (state.auth.requireAuth && !state.auth.authenticated) return;
+  els.authModal.classList.add("hidden");
+  els.authModal.setAttribute("aria-hidden", "true");
+  syncBodyModalLock();
+}
+
+function renderAuthState() {
+  if (!els.authModal) return;
+  const isRegister = state.auth.mode === "register";
+  const authenticated = Boolean(state.auth.authenticated);
+  els.authTitle.textContent = authenticated ? `当前账户：${state.auth.username}` : (isRegister ? "注册局域网账户" : "登录局域网账户");
+  els.authHint.textContent = authenticated
+    ? "你已经登录，可以直接使用共享音色和生成服务。"
+    : `局域网用户需要先注册或登录，数据会保存在这台电脑本地。管理员账户：admin / admin。当前模式：${isRegister ? "注册" : "登录"}。`;
+  els.authUsername.disabled = authenticated;
+  els.authPassword.disabled = authenticated;
+  els.authSubmitBtn.classList.toggle("hidden", authenticated);
+  els.authSwitchBtn.classList.toggle("hidden", authenticated);
+  els.authLogoutRow.classList.toggle("hidden", !authenticated);
+  els.authSubmitBtn.textContent = isRegister ? "注册并登录" : "登录";
+  els.authSwitchBtn.textContent = isRegister ? "已有账号？去登录" : "没有账号？去注册";
+
+  if (els.authEntryBtn) {
+    if (state.auth.isOwner) {
+      els.authEntryBtn.textContent = "本机账户";
+    } else if (authenticated && state.auth.username) {
+      els.authEntryBtn.textContent = `账户：${state.auth.username}`;
+    } else {
+      els.authEntryBtn.textContent = "登录 / 注册";
+    }
+  }
+
+  if (els.authLogoutEntryBtn) {
+    els.authLogoutEntryBtn.classList.toggle("hidden", !authenticated || Boolean(state.auth.isOwner));
+  }
+}
+
+async function fetchAuthStatus() {
+  const result = await fetchJson("/indextts-ui/api/auth-status");
+  state.auth = { ...state.auth, ...(result || {}) };
+  renderAuthState();
+  if (state.auth.requireAuth && !state.auth.authenticated) {
+    openAuthModal();
+  }
+  return state.auth;
+}
+
+async function submitAuthForm() {
+  ensureAuthUI();
+  const username = (els.authUsername.value || "").trim();
+  const password = els.authPassword.value || "";
+  if (!username || !password) {
+    showToast("请先输入用户名和密码。", true);
+    return;
+  }
+  const endpoint = state.auth.mode === "register" ? "/indextts-ui/api/register" : "/indextts-ui/api/login";
+  setButtonBusy(els.authSubmitBtn, true, state.auth.mode === "register" ? "注册中..." : "登录中...");
+  try {
+    const result = await fetchJson(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password }),
+    });
+    state.auth = { ...state.auth, ...(result || {}) };
+    els.authPassword.value = "";
+    renderAuthState();
+    closeAuthModal();
+    await syncVoicesFromServer({ migrateLegacy: true });
+    renderAll();
+    showToast(state.auth.mode === "register" ? "注册成功，已自动登录。" : "登录成功。");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    if (els.authSubmitBtn) {
+      els.authSubmitBtn.disabled = false;
+    }
+    renderAuthState();
+  }
+}
+
+async function logoutAuth() {
+  try {
+    await fetchJson("/indextts-ui/api/logout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+    });
+  } catch (_) {
+    // ignore
+  }
+  state.auth = { ...state.auth, authenticated: false, username: "", isOwner: false, requireAuth: true, mode: "login" };
+  state.voices = [];
+  renderAuthState();
+  renderAll();
+  openAuthModal();
+}
+
+function renderLanShare() {
+  if (!els.toggleLanShareBtn || !els.lanShareMeta || !els.lanShareLink || !els.copyLanShareBtn) return;
+  const share = state.lanShare || {};
+  const hasUrl = Boolean(share.enabled && share.url);
+
+  els.toggleLanShareBtn.textContent = share.enabled ? "关闭局域网共享" : "开启局域网共享";
+  els.toggleLanShareBtn.classList.toggle("is-active", Boolean(share.enabled));
+  els.lanShareMeta.classList.toggle("hidden", !hasUrl);
+
+  if (hasUrl) {
+    els.lanShareLink.href = share.url;
+    els.lanShareLink.textContent = share.url;
+    els.copyLanShareBtn.disabled = false;
+  } else {
+    els.lanShareLink.href = "#";
+    els.lanShareLink.textContent = "";
+    els.copyLanShareBtn.disabled = true;
+  }
+}
+
+async function fetchLanShareStatus() {
+  const result = await fetchJson("/indextts-ui/api/lan-share-status");
+  state.lanShare = { ...state.lanShare, ...(result || {}) };
+  renderLanShare();
+  return state.lanShare;
+}
+
+async function toggleLanShare() {
+  if (!els.toggleLanShareBtn) return;
+  const shareEnabled = Boolean(state.lanShare?.enabled);
+  setButtonBusy(els.toggleLanShareBtn, true, shareEnabled ? "关闭中..." : "开启中...");
+  try {
+    const result = await fetchJson(
+      shareEnabled ? "/indextts-ui/api/stop-lan-share" : "/indextts-ui/api/start-lan-share",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ port: state.lanShare?.port || 8192 }),
+      },
+    );
+    state.lanShare = { ...state.lanShare, ...(result || {}) };
+    renderLanShare();
+    if (state.lanShare.enabled && state.lanShare.url) {
+      showToast(`局域网共享已开启：${state.lanShare.url}`);
+    } else {
+      showToast("局域网共享已关闭");
+    }
+  } catch (error) {
+    showToast(error.message, true);
+    await fetchLanShareStatus().catch(() => {});
+  } finally {
+    if (els.toggleLanShareBtn) {
+      els.toggleLanShareBtn.disabled = false;
+    }
+    renderLanShare();
+  }
+}
+
+async function copyLanShareUrl() {
+  const url = state.lanShare?.url || "";
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    showToast("局域网地址已复制");
+  } catch (error) {
+    showToast("复制失败，请手动复制地址", true);
+  }
+}
+
 function removeLegacySettingsSliders() {
   document.querySelectorAll("#settingsModal .slider-field").forEach((node) => node.remove());
 }
@@ -402,6 +705,10 @@ function createVoice(data = {}) {
     name: data.name || `基础音色${state.voices.length + 1}`,
     audioFile: data.audioFile || "",
     audioUrl: data.audioUrl || "",
+    ownerUsername: data.ownerUsername || "",
+    isShared: Boolean(data.isShared),
+    isProtected: Boolean(data.isProtected),
+    canDelete: data.canDelete !== undefined ? Boolean(data.canDelete) : true,
     previews: data.previews || {},
     previewPendingEmotion: data.previewPendingEmotion || "",
     previewBatchPending: Boolean(data.previewBatchPending),
@@ -796,6 +1103,10 @@ async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
   if (!response.ok) {
     const text = await response.text();
+    if (response.status === 401) {
+      state.auth = { ...state.auth, authenticated: false, requireAuth: true };
+      openAuthModal();
+    }
     throw new Error(text || `Request failed: ${response.status}`);
   }
   const contentType = response.headers.get("content-type") || "";
@@ -880,6 +1191,104 @@ function renderLineCountHint() {
 
 function getVoiceById(voiceId) {
   return state.voices.find((voice) => voice.id === voiceId) || null;
+}
+
+function getVoiceScopeLabel(voice) {
+  if (voice?.isShared) return "共享音色";
+  if (state.auth.isOwner && (voice?.ownerUsername || "") === "owner") return "我的音色";
+  if ((voice?.ownerUsername || "") && voice.ownerUsername === state.auth.username) return "我的音色";
+  if (voice?.ownerUsername) return `${voice.ownerUsername} 的音色`;
+  return "我的音色";
+}
+
+async function registerExistingVoice(name, audioFile) {
+  const result = await fetchJson("/indextts-ui/api/register-existing-voice", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, audioFile }),
+  });
+  return result.voice || null;
+}
+
+async function syncVoicesFromServer({ migrateLegacy = false } = {}) {
+  if (state.auth.requireAuth && !state.auth.authenticated) {
+    state.voices = [];
+    return [];
+  }
+
+  const previewCache = new Map(state.voices.map((voice) => [voice.id, voice]));
+  if (migrateLegacy && state.auth.isOwner) {
+    for (const voice of state.voices) {
+      if (!voice?.audioFile) continue;
+      try {
+        await registerExistingVoice(voice.name, voice.audioFile);
+      } catch (_) {
+        // ignore duplicates and registration failures during migration
+      }
+    }
+  }
+
+  const result = await fetchJson("/indextts-ui/api/voices");
+  const items = Array.isArray(result.items) ? result.items : [];
+  state.voices = items.map((item) => {
+    const cached = previewCache.get(item.id) || {};
+    return createVoice({
+      ...item,
+      previews: item.previews || cached.previews || {},
+      previewPendingEmotion: cached.previewPendingEmotion || "",
+      previewBatchPending: cached.previewBatchPending || false,
+      previewBatchCurrentIndex: cached.previewBatchCurrentIndex || 0,
+      previewBatchTotal: cached.previewBatchTotal || 0,
+      previewActiveEmotion: cached.previewActiveEmotion || "",
+      previewActiveUrl: cached.previewActiveUrl || "",
+    });
+  });
+  return state.voices;
+}
+
+function clearRolesUsingVoice(voiceId) {
+  state.roles = state.roles.map((role) => (role.voiceId === voiceId ? { ...role, voiceId: "" } : role));
+}
+
+async function renameVoiceOnServer(voice, nextName) {
+  const trimmedName = (nextName || "").trim();
+  if (!trimmedName || trimmedName === voice.name) {
+    return voice.name;
+  }
+
+  const result = await fetchJson("/indextts-ui/api/update-voice", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ voiceId: voice.id, name: trimmedName }),
+  });
+  const updated = result.voice || null;
+  if (!updated) return trimmedName;
+
+  const index = state.voices.findIndex((item) => item.id === voice.id);
+  if (index >= 0) {
+    state.voices[index] = createVoice({
+      ...state.voices[index],
+      ...updated,
+    });
+  }
+  saveState();
+  renderRoles();
+  updateVoiceCenterCard(voice.id);
+  return trimmedName;
+}
+
+async function deleteVoiceOnServer(voice) {
+  await fetchJson("/indextts-ui/api/delete-voice", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ voiceId: voice.id }),
+  });
+  state.voices = state.voices.filter((item) => item.id !== voice.id);
+  clearRolesUsingVoice(voice.id);
+  saveState();
+  renderVoiceCenter();
+  renderRoles();
+  renderLines();
 }
 
 function getResolvedRole(role) {
@@ -1734,22 +2143,18 @@ function ensureVoiceCenterUI() {
 async function uploadVoiceFile(file) {
   const body = new FormData();
   body.append("file", file);
-  const result = await fetchJson("/indextts-ui/api/upload-role-audio", {
+  body.append("name", file.name.replace(/\.[^.]+$/, "").trim() || `基础音色${state.voices.length + 1}`);
+  const result = await fetchJson("/indextts-ui/api/upload-voice", {
     method: "POST",
     body,
   });
 
-  const baseName = file.name.replace(/\.[^.]+$/, "").trim() || `基础音色${state.voices.length + 1}`;
-  const voice = createVoice({
-    name: baseName,
-    audioFile: result.audioFile,
-    audioUrl: result.audioUrl,
-  });
-  state.voices.push(voice);
+  await syncVoicesFromServer();
+  const voice = getVoiceById(result.voice?.id);
   saveState();
   renderVoiceCenter();
   renderRoles();
-  showToast(`已添加基础音色：${voice.name}`);
+  showToast(`已添加基础音色：${voice?.name || "基础音色"}`);
 }
 
 function getVoicePreviewPrompt(voice, emotionPreset) {
@@ -1803,6 +2208,7 @@ async function previewVoiceEmotion(voiceId, emotionPreset, options = {}) {
         voice,
         emotionPreset,
         previewText: getVoicePreviewPrompt(voice, emotionPreset),
+        previewSignature: currentSignature,
         settings: state.settings,
       }),
     });
@@ -1941,31 +2347,58 @@ function renderVoiceCenter() {
     nameInput.placeholder = "基础音色名称";
     nameInput.addEventListener("input", (event) => {
       voice.name = event.target.value;
-      saveState();
-      renderRoles();
+    });
+    nameInput.addEventListener("change", async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      const previousName = voice.name;
+      try {
+        target.disabled = true;
+        const savedName = await renameVoiceOnServer(voice, target.value);
+        target.value = savedName;
+      } catch (error) {
+        voice.name = previousName;
+        target.value = previousName;
+        showToast(error.message, true);
+      } finally {
+        target.disabled = false;
+      }
     });
 
     const removeBtn = document.createElement("button");
     removeBtn.type = "button";
     removeBtn.className = "icon danger";
     removeBtn.textContent = "×";
-    removeBtn.title = "删除音色";
-    removeBtn.addEventListener("click", () => {
-      state.voices = state.voices.filter((item) => item.id !== voice.id);
-      state.roles = state.roles.map((role) => role.voiceId === voice.id ? { ...role, voiceId: "" } : role);
-      saveState();
-      renderVoiceCenter();
-      renderRoles();
-      renderLines();
+    removeBtn.title = voice.canDelete ? "删除音色" : "这个共享音色由本机管理员维护，不能删除";
+    removeBtn.disabled = !voice.canDelete;
+    removeBtn.addEventListener("click", async () => {
+      if (!voice.canDelete) {
+        showToast("这个共享音色由本机管理员维护，不能删除。", true);
+        return;
+      }
+      try {
+        removeBtn.disabled = true;
+        await deleteVoiceOnServer(voice);
+      } catch (error) {
+        removeBtn.disabled = false;
+        showToast(error.message, true);
+      }
     });
 
     head.append(avatar, nameInput, removeBtn);
 
-    const meta = document.createElement("div");
-    meta.className = "voice-card-meta";
-    meta.textContent = voice.audioFile || "未上传参考音频";
+  const meta = document.createElement("div");
+  meta.className = "voice-card-meta";
+  meta.textContent = voice.audioFile || "未上传参考音频";
 
-    const player = document.createElement("audio");
+  const badgeRow = document.createElement("div");
+  badgeRow.className = "voice-card-badges";
+  const scopeBadge = document.createElement("span");
+  scopeBadge.className = `voice-badge ${voice.isShared ? "shared" : "owned"}`;
+  scopeBadge.textContent = getVoiceScopeLabel(voice);
+  badgeRow.append(scopeBadge);
+
+  const player = document.createElement("audio");
     player.dataset.voicePlayer = voice.id;
     player.preload = "metadata";
 
@@ -2051,7 +2484,7 @@ function renderVoiceCenter() {
       actions.append(selectBtn);
     }
 
-    card.append(head, meta, chips, previewStatus, player, actions);
+  card.append(head, meta, badgeRow, chips, previewStatus, player, actions);
     els.voiceCenterList.append(card);
     voiceViewCache.set(voice.id, { node: card });
 
@@ -2111,22 +2544,42 @@ function updateVoiceCenterCard(voiceId) {
   nameInput.placeholder = "基础音色名称";
   nameInput.addEventListener("input", (event) => {
     voice.name = event.target.value;
-    saveState();
-    renderRoles();
+  });
+  nameInput.addEventListener("change", async (event) => {
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    const previousName = voice.name;
+    try {
+      target.disabled = true;
+      const savedName = await renameVoiceOnServer(voice, target.value);
+      target.value = savedName;
+    } catch (error) {
+      voice.name = previousName;
+      target.value = previousName;
+      showToast(error.message, true);
+    } finally {
+      target.disabled = false;
+    }
   });
 
   const removeBtn = document.createElement("button");
   removeBtn.type = "button";
   removeBtn.className = "icon danger";
   removeBtn.textContent = "×";
-  removeBtn.title = "删除音色";
-  removeBtn.addEventListener("click", () => {
-    state.voices = state.voices.filter((item) => item.id !== voice.id);
-    state.roles = state.roles.map((role) => role.voiceId === voice.id ? { ...role, voiceId: "" } : role);
-    saveState();
-    renderVoiceCenter();
-    renderRoles();
-    renderLines();
+  removeBtn.title = voice.canDelete ? "删除音色" : "这个共享音色由本机管理员维护，不能删除";
+  removeBtn.disabled = !voice.canDelete;
+  removeBtn.addEventListener("click", async () => {
+    if (!voice.canDelete) {
+      showToast("这个共享音色由本机管理员维护，不能删除。", true);
+      return;
+    }
+    try {
+      removeBtn.disabled = true;
+      await deleteVoiceOnServer(voice);
+    } catch (error) {
+      removeBtn.disabled = false;
+      showToast(error.message, true);
+    }
   });
 
   head.append(avatar, nameInput, removeBtn);
@@ -2134,6 +2587,13 @@ function updateVoiceCenterCard(voiceId) {
   const meta = document.createElement("div");
   meta.className = "voice-card-meta";
   meta.textContent = voice.audioFile || "未上传参考音频";
+
+  const badgeRow = document.createElement("div");
+  badgeRow.className = "voice-card-badges";
+  const scopeBadge = document.createElement("span");
+  scopeBadge.className = `voice-badge ${voice.isShared ? "shared" : "owned"}`;
+  scopeBadge.textContent = getVoiceScopeLabel(voice);
+  badgeRow.append(scopeBadge);
 
   const player = document.createElement("audio");
   player.dataset.voicePlayer = voice.id;
@@ -2221,7 +2681,7 @@ function updateVoiceCenterCard(voiceId) {
     actions.append(selectBtn);
   }
 
-  card.append(head, meta, chips, previewStatus, player, actions);
+    card.append(head, meta, badgeRow, chips, previewStatus, player, actions);
   oldNode.replaceWith(card);
   voiceViewCache.set(voice.id, { node: card });
 
@@ -2791,6 +3251,8 @@ async function waitForMergeTask(taskKey) {
 }
 
 function renderAll() {
+  ensureLanShareUI();
+  renderLanShare();
   renderVoiceCenter();
   renderRoles();
   renderLines();
@@ -2812,7 +3274,7 @@ async function initConfig() {
   const config = await fetchJson("/indextts-ui/api/config");
   state.emotionPresets = config.emotionPresets || [];
   state.settings = { ...state.settings, ...(config.defaultSettings || {}), ...(state.settings || {}) };
-  await refreshMergedAudios();
+  state.lanShare = { ...state.lanShare, ...(config.lanShare || {}) };
 }
 
 function ensureSeedData() {
@@ -3183,8 +3645,68 @@ async function warmupModel() {
 
 function bindEvents() {
   ensureToolbarButtons();
+  ensureAuthUI();
+  ensureAuthEntryUI();
+  ensureLanShareUI();
   ensureVoiceCenterUI();
   removeLegacySettingsSliders();
+
+  els.toggleLanShareBtn?.addEventListener("click", () => {
+    toggleLanShare();
+  });
+
+  els.copyLanShareBtn?.addEventListener("click", () => {
+    copyLanShareUrl();
+  });
+
+  els.authEntryBtn?.addEventListener("click", () => {
+    openAuthModal();
+  });
+
+  els.authLogoutEntryBtn?.addEventListener("click", () => {
+    logoutAuth();
+  });
+
+  els.closeAuthModalBtn?.addEventListener("click", () => {
+    closeAuthModal();
+  });
+
+  els.authSubmitBtn?.addEventListener("click", () => {
+    submitAuthForm();
+  });
+
+  els.authSwitchBtn?.addEventListener("click", () => {
+    state.auth.mode = state.auth.mode === "register" ? "login" : "register";
+    if (els.authPassword) {
+      els.authPassword.value = "";
+    }
+    renderAuthState();
+    els.authUsername?.focus();
+  });
+
+  els.authLogoutBtn?.addEventListener("click", () => {
+    logoutAuth();
+  });
+
+  els.authModal?.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.closeModal === "auth") {
+      closeAuthModal();
+    }
+  });
+
+  [els.authUsername, els.authPassword].forEach((input) => {
+    input?.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submitAuthForm();
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeAuthModal();
+      }
+    });
+  });
 
   els.openSettingsBtn.addEventListener("click", () => {
     openSettingsModal();
@@ -3513,6 +4035,13 @@ async function boot() {
     loadState();
     ensureSeedData();
     bindEvents();
+    await fetchAuthStatus();
+    if (!state.auth.requireAuth || state.auth.authenticated) {
+      await refreshMergedAudios();
+    } else {
+      state.mergedAudios = [];
+    }
+    await syncVoicesFromServer({ migrateLegacy: true });
     startAutoSave();
     renderAll();
     reconcilePendingGenerations().catch((error) => {

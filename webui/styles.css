@@ -78,12 +78,82 @@ body.modal-open {
 
 .hero-actions {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: flex-end;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.lan-share-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.hero-share-btn {
+  min-width: 136px;
+  align-self: flex-start;
+}
+
+.hero-share-btn.is-active {
+  border-color: rgba(30, 201, 138, 0.35);
+  color: #0d8a5e;
+}
+
+.lan-share-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+    width: 100%;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.lan-share-link {
+  display: inline-block;
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--primary-strong);
+  text-decoration: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: left;
+}
+
+.lan-share-link:hover {
+  text-decoration: underline;
+}
+
+.lan-share-copy-btn {
+  min-width: 82px;
+  padding-inline: 14px;
+}
+
+.settings-lan-share-panel {
+  margin-top: 14px;
+}
+
+.hero-auth-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.hero-account-btn {
+  min-width: 104px;
+}
+
+.hero-account-logout {
+  min-width: 96px;
 }
 
 .hero-settings-btn {
   min-width: 88px;
+  flex-shrink: 0;
 }
 
 .layout {
@@ -801,6 +871,7 @@ body.modal-open {
 .line-text,
 .line-emotion-text,
 input[type="text"],
+input[type="password"],
 input[type="number"],
 select {
   width: 100%;
@@ -1280,6 +1351,36 @@ audio {
   color: var(--muted);
   font-size: 13px;
   word-break: break-all;
+}
+
+.voice-card-badges {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.voice-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.voice-badge.shared {
+  color: #0d7d59;
+  background: rgba(30, 201, 138, 0.12);
+  border: 1px solid rgba(30, 201, 138, 0.28);
+}
+
+.voice-badge.owned {
+  color: var(--primary-strong);
+  background: rgba(44, 121, 255, 0.1);
+  border: 1px solid rgba(44, 121, 255, 0.2);
 }
 
 .voice-emotion-chips {

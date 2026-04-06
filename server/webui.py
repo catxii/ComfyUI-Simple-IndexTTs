@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
+import hashlib
 import logging
 import os
 import re
+import secrets
+import socket
 import threading
 import time
 import uuid
@@ -16,7 +20,7 @@ import numpy as np
 import soundfile as sf
 import torch
 import torchaudio
-from aiohttp import web
+from aiohttp import ClientSession, ClientTimeout, web
 
 from .infer_v2 import IndexTTS2
 
@@ -29,6 +33,9 @@ ROLE_AUDIO_DIR = Path(folder_paths.get_input_directory()) / "indextts_ui" / "rol
 GENERATED_AUDIO_DIR = Path(folder_paths.get_output_directory()) / "indextts_ui" / "generated"
 MERGED_AUDIO_DIR = Path(folder_paths.get_output_directory()) / "indextts_ui" / "merged"
 VOICE_PREVIEW_DIR = Path(folder_paths.get_output_directory()) / "indextts_ui" / "voice_previews"
+LOCAL_DATA_DIR = BASE_DIR / "_runtime" / "local_data"
+ACCOUNTS_PATH = LOCAL_DATA_DIR / "accounts.json"
+VOICES_PATH = LOCAL_DATA_DIR / "voices.json"
 DEFAULT_CFG_PATH = Path(folder_paths.models_dir) / "indextts" / "config.yaml"
 DEFAULT_MODEL_DIR = Path(folder_paths.models_dir) / "indextts"
 
@@ -40,10 +47,462 @@ GENERATION_TASKS_LOCK = threading.Lock()
 GENERATION_TASKS: dict[str, dict[str, object]] = {}
 MERGE_TASKS_LOCK = threading.Lock()
 MERGE_TASKS: dict[str, dict[str, object]] = {}
+LOCAL_DATA_LOCK = threading.Lock()
+ACTIVE_SESSIONS: dict[str, dict[str, object]] = {}
+LAN_SHARE_LOCK = threading.Lock()
+LAN_SHARE_STATE: dict[str, object] = {
+    "enabled": False,
+    "host": "0.0.0.0",
+    "port": 8192,
+    "url": "",
+    "ips": [],
+    "error": None,
+    "startedAt": None,
+}
+LAN_SHARE_RUNTIME: dict[str, object] = {
+    "thread": None,
+    "loop": None,
+    "runner": None,
+    "site": None,
+}
 
 
 class GenerationCancelledError(Exception):
     pass
+
+
+def load_json_file(path: Path, default):
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def save_json_file(path: Path, payload) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def ensure_local_data_files() -> None:
+    LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if not ACCOUNTS_PATH.exists():
+        save_json_file(
+            ACCOUNTS_PATH,
+            {
+                "users": [
+                    {
+                        "username": "admin",
+                        "passwordHash": hash_password("admin"),
+                        "isAdmin": True,
+                        "createdAt": time.time(),
+                    }
+                ]
+            },
+        )
+    if not VOICES_PATH.exists():
+        save_json_file(VOICES_PATH, {"voices": []})
+    accounts = load_json_file(ACCOUNTS_PATH, {"users": []})
+    users = [user for user in accounts.get("users", []) if isinstance(user, dict)]
+    if not any(str(user.get("username") or "").lower() == "admin" for user in users):
+        users.append(
+            {
+                "username": "admin",
+                "passwordHash": hash_password("admin"),
+                "isAdmin": True,
+                "createdAt": time.time(),
+            }
+        )
+        save_json_file(ACCOUNTS_PATH, {"users": users})
+
+
+def read_accounts() -> dict:
+    with LOCAL_DATA_LOCK:
+        ensure_local_data_files()
+        data = load_json_file(ACCOUNTS_PATH, {"users": []})
+        if not isinstance(data, dict):
+            data = {"users": []}
+        data.setdefault("users", [])
+        return data
+
+
+def write_accounts(data: dict) -> None:
+    with LOCAL_DATA_LOCK:
+        ensure_local_data_files()
+        save_json_file(ACCOUNTS_PATH, data)
+
+
+def find_account_by_username(username: str) -> dict | None:
+    target = str(username or "").strip().lower()
+    if not target:
+        return None
+    accounts = read_accounts()
+    users = [user for user in accounts.get("users", []) if isinstance(user, dict)]
+    return next((user for user in users if str(user.get("username") or "").lower() == target), None)
+
+
+def read_voice_library() -> dict:
+    with LOCAL_DATA_LOCK:
+        ensure_local_data_files()
+        data = load_json_file(VOICES_PATH, {"voices": []})
+        if not isinstance(data, dict):
+            data = {"voices": []}
+        data.setdefault("voices", [])
+        return data
+
+
+def write_voice_library(data: dict) -> None:
+    with LOCAL_DATA_LOCK:
+        ensure_local_data_files()
+        save_json_file(VOICES_PATH, data)
+
+
+def hash_password(password: str, *, salt: str | None = None) -> str:
+    use_salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), use_salt.encode("utf-8"), 200000)
+    return f"pbkdf2_sha256$200000${use_salt}${digest.hex()}"
+
+
+def verify_password(password: str, hashed: str) -> bool:
+    try:
+        algorithm, iterations_raw, salt, expected = hashed.split("$", 3)
+        if algorithm != "pbkdf2_sha256":
+            return False
+        digest = hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt.encode("utf-8"),
+            int(iterations_raw),
+        )
+        return secrets.compare_digest(digest.hex(), expected)
+    except Exception:
+        return False
+
+
+def is_lan_request(request: web.Request) -> bool:
+    return request.headers.get("X-IndexTTS-Lan-Share", "") == "1"
+
+
+def get_request_ip(request: web.Request) -> str:
+    forwarded = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    if forwarded:
+        return forwarded
+    return request.remote or ""
+
+
+def is_owner_request(request: web.Request) -> bool:
+    if is_lan_request(request):
+        return False
+    request_ip = get_request_ip(request)
+    return request_ip in {"127.0.0.1", "::1", ""}
+
+
+def build_user_payload(username: str, *, is_owner: bool, authenticated: bool, require_auth: bool) -> dict[str, object]:
+    return {
+        "username": username,
+        "isOwner": is_owner,
+        "authenticated": authenticated,
+        "requireAuth": require_auth,
+    }
+
+
+def get_authenticated_user(request: web.Request) -> dict[str, object]:
+    if is_owner_request(request):
+        return build_user_payload("owner", is_owner=True, authenticated=True, require_auth=False)
+
+    session_token = request.cookies.get("indextts_session", "")
+    if session_token:
+        session = ACTIVE_SESSIONS.get(session_token)
+        if session:
+            username = str(session.get("username") or "")
+            account = find_account_by_username(username)
+            return build_user_payload(
+                username,
+                is_owner=bool(account and account.get("isAdmin")),
+                authenticated=True,
+                require_auth=True,
+            )
+    return build_user_payload("", is_owner=False, authenticated=False, require_auth=True)
+
+
+def require_authenticated_user(request: web.Request) -> dict[str, object]:
+    user = get_authenticated_user(request)
+    if not user.get("authenticated"):
+        raise web.HTTPUnauthorized(text="请先注册或登录后再使用局域网共享功能。")
+    return user
+
+
+def sanitize_voice_record(record: dict, user: dict[str, object]) -> dict[str, object]:
+    owner_username = str(record.get("ownerUsername") or "")
+    is_owner = bool(user.get("isOwner"))
+    current_username = str(user.get("username") or "")
+    can_delete = bool(is_owner or (owner_username == current_username and not record.get("isShared")))
+    preview_payload: dict[str, object] = {}
+    for emotion_preset, preview in (record.get("previews") or {}).items():
+        if not isinstance(preview, dict):
+            continue
+        audio_file = str(preview.get("audioFile") or "").strip()
+        if not audio_file:
+            continue
+        try:
+            preview_path, preview_name = ensure_voice_preview_wav_file(audio_file)
+        except web.HTTPException:
+            continue
+        preview_payload[str(emotion_preset)] = {
+            "audioFile": preview_name,
+            "audioUrl": build_public_url("voice-previews", preview_name),
+            "durationSeconds": preview.get("durationSeconds"),
+            "previewSignature": preview.get("previewSignature") or "",
+        }
+    return {
+        "id": record.get("id") or "",
+        "name": record.get("name") or "基础音色",
+        "audioFile": record.get("audioFile") or "",
+        "audioUrl": build_public_url("roles", str(record.get("audioFile") or "")),
+        "ownerUsername": owner_username,
+        "isShared": bool(record.get("isShared")),
+        "isProtected": bool(record.get("isProtected")),
+        "canDelete": can_delete,
+        "previews": preview_payload,
+    }
+
+
+def get_cached_voice_preview(record: dict, emotion_preset: str, preview_signature: str) -> dict | None:
+    previews = record.get("previews") or {}
+    preview = previews.get(emotion_preset)
+    if not isinstance(preview, dict):
+        return None
+    if str(preview.get("previewSignature") or "") != str(preview_signature or ""):
+        return None
+    audio_file = str(preview.get("audioFile") or "").strip()
+    if not audio_file:
+        return None
+    try:
+        preview_path, preview_name = ensure_voice_preview_wav_file(audio_file)
+    except web.HTTPException:
+        return None
+    return {
+        "audioFile": preview_name,
+        "audioUrl": build_public_url("voice-previews", preview_name),
+        "durationSeconds": preview.get("durationSeconds"),
+        "emotionPreset": emotion_preset,
+        "previewSignature": preview.get("previewSignature") or "",
+    }
+
+
+def list_visible_voices(user: dict[str, object]) -> list[dict[str, object]]:
+    library = read_voice_library()
+    visible: list[dict[str, object]] = []
+    current_username = str(user.get("username") or "")
+    is_owner = bool(user.get("isOwner"))
+    for record in library.get("voices", []):
+        if not isinstance(record, dict):
+            continue
+        if is_owner or record.get("isShared") or record.get("ownerUsername") == current_username:
+            visible.append(sanitize_voice_record(record, user))
+    return visible
+
+
+def find_voice_record(voice_id: str) -> dict | None:
+    library = read_voice_library()
+    for record in library.get("voices", []):
+        if isinstance(record, dict) and record.get("id") == voice_id:
+            return record
+    return None
+
+
+def upsert_voice_record(record: dict) -> dict:
+    library = read_voice_library()
+    voices = [item for item in library.get("voices", []) if isinstance(item, dict)]
+    existing_index = next((index for index, item in enumerate(voices) if item.get("id") == record.get("id")), -1)
+    if existing_index >= 0:
+        voices[existing_index] = record
+    else:
+        voices.append(record)
+    library["voices"] = voices
+    write_voice_library(library)
+    return record
+
+
+def delete_voice_record(voice_id: str) -> dict | None:
+    library = read_voice_library()
+    voices = [item for item in library.get("voices", []) if isinstance(item, dict)]
+    target = next((item for item in voices if item.get("id") == voice_id), None)
+    if target is None:
+        return None
+    library["voices"] = [item for item in voices if item.get("id") != voice_id]
+    write_voice_library(library)
+    return target
+
+
+def get_lan_ips() -> list[str]:
+    candidates: list[str] = []
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            address = sock.getsockname()[0]
+            if address and not address.startswith("127.") and not address.startswith("169.254."):
+                candidates.append(address)
+    except OSError:
+        pass
+
+    try:
+        hostname = socket.gethostname()
+        _, _, ip_list = socket.gethostbyname_ex(hostname)
+        for address in ip_list:
+            if address and not address.startswith("127.") and not address.startswith("169.254."):
+                candidates.append(address)
+    except OSError:
+        pass
+
+    unique: list[str] = []
+    for address in candidates:
+        if address not in unique:
+            unique.append(address)
+    return unique
+
+
+def get_lan_share_state() -> dict[str, object]:
+    with LAN_SHARE_LOCK:
+        return dict(LAN_SHARE_STATE)
+
+
+def update_lan_share_state(**updates) -> dict[str, object]:
+    with LAN_SHARE_LOCK:
+        LAN_SHARE_STATE.update(updates)
+        return dict(LAN_SHARE_STATE)
+
+
+async def lan_share_proxy_handler(request: web.Request) -> web.StreamResponse:
+    upstream_url = f"http://127.0.0.1:8191{request.rel_url}"
+    headers = {
+        key: value
+        for key, value in request.headers.items()
+        if key.lower() not in {"host", "content-length", "connection", "accept-encoding", "origin", "referer"}
+    }
+    headers["X-IndexTTS-Lan-Share"] = "1"
+    client_ip = request.remote or ""
+    if client_ip:
+        headers["X-Forwarded-For"] = client_ip
+    body = await request.read()
+    session: ClientSession = request.app["proxy_session"]
+
+    async with session.request(
+        request.method,
+        upstream_url,
+        headers=headers,
+        data=body if body else None,
+        allow_redirects=False,
+    ) as upstream:
+        response_headers = {
+            key: value
+            for key, value in upstream.headers.items()
+            if key.lower() not in {"content-length", "transfer-encoding", "connection", "content-encoding"}
+        }
+        payload = await upstream.read()
+        return web.Response(status=upstream.status, headers=response_headers, body=payload)
+
+
+async def start_lan_share_server_async(port: int) -> None:
+    current_ips = get_lan_ips()
+    session = ClientSession(timeout=ClientTimeout(total=None, sock_connect=30, sock_read=None))
+    app = web.Application(client_max_size=1024**3)
+    app["proxy_session"] = session
+
+    async def _cleanup(app_instance: web.Application) -> None:
+        proxy_session: ClientSession = app_instance["proxy_session"]
+        await proxy_session.close()
+
+    app.on_cleanup.append(_cleanup)
+    app.router.add_route("*", "/{tail:.*}", lan_share_proxy_handler)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+    LAN_SHARE_RUNTIME["runner"] = runner
+    LAN_SHARE_RUNTIME["site"] = site
+    update_lan_share_state(
+        enabled=True,
+        port=port,
+        ips=current_ips,
+        url=f"http://{(current_ips[0] if current_ips else '127.0.0.1')}:{port}/indextts-ui",
+        error=None,
+        startedAt=time.time(),
+    )
+
+
+def lan_share_thread_main(port: int) -> None:
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    LAN_SHARE_RUNTIME["loop"] = loop
+    try:
+        loop.run_until_complete(start_lan_share_server_async(port))
+        loop.run_forever()
+    except Exception as exc:
+        LOGGER.exception("Failed to start LAN share server")
+        update_lan_share_state(enabled=False, error=str(exc), startedAt=None, url="", ips=[])
+    finally:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.close()
+        LAN_SHARE_RUNTIME["loop"] = None
+        LAN_SHARE_RUNTIME["thread"] = None
+        LAN_SHARE_RUNTIME["runner"] = None
+        LAN_SHARE_RUNTIME["site"] = None
+
+
+def ensure_lan_share_running(port: int = 8192) -> dict[str, object]:
+    current = get_lan_share_state()
+    if current.get("enabled"):
+        return current
+
+    thread = threading.Thread(target=lan_share_thread_main, args=(port,), name="IndexTTS-LANShare", daemon=True)
+    LAN_SHARE_RUNTIME["thread"] = thread
+    update_lan_share_state(enabled=False, error=None, port=port, url="", ips=[], startedAt=None)
+    thread.start()
+
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        time.sleep(0.1)
+        current = get_lan_share_state()
+        if current.get("enabled") or current.get("error"):
+            return current
+
+    timeout_message = "LAN share server startup timed out."
+    update_lan_share_state(enabled=False, error=timeout_message, startedAt=None, url="", ips=[])
+    return get_lan_share_state()
+
+
+async def stop_lan_share_server_async() -> None:
+    runner = LAN_SHARE_RUNTIME.get("runner")
+    if runner is not None:
+        await runner.cleanup()
+
+
+def stop_lan_share_server() -> dict[str, object]:
+    loop = LAN_SHARE_RUNTIME.get("loop")
+    thread = LAN_SHARE_RUNTIME.get("thread")
+
+    if loop is not None:
+        future = asyncio.run_coroutine_threadsafe(stop_lan_share_server_async(), loop)
+        try:
+            future.result(timeout=10)
+        except Exception as exc:
+            LOGGER.warning("Failed while stopping LAN share server: %r", exc)
+        loop.call_soon_threadsafe(loop.stop)
+
+    if isinstance(thread, threading.Thread) and thread.is_alive():
+        thread.join(timeout=10)
+
+    update_lan_share_state(enabled=False, url="", ips=[], error=None, startedAt=None)
+    return get_lan_share_state()
 
 
 def normalize_user_error(exc: Exception | str) -> str:
@@ -84,6 +543,7 @@ def ensure_webui_dirs() -> None:
     GENERATED_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
     MERGED_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
     VOICE_PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_local_data_files()
 
 
 def slugify(value: str, fallback: str = "audio") -> str:
@@ -130,6 +590,22 @@ def ensure_generated_wav_file(filename: str) -> tuple[Path, str]:
 
     wav_name = f"{source_path.stem}.wav"
     wav_path = safe_file_path("generated", wav_name)
+    if (not wav_path.exists()) or wav_path.stat().st_mtime < source_path.stat().st_mtime:
+        data, sample_rate = sf.read(str(source_path), dtype="int16", always_2d=True)
+        sf.write(str(wav_path), data, sample_rate, format="WAV", subtype="PCM_16")
+    return wav_path, wav_name
+
+
+def ensure_voice_preview_wav_file(filename: str) -> tuple[Path, str]:
+    source_path = safe_file_path("voice-previews", filename)
+    if not source_path.exists():
+        raise web.HTTPNotFound(text="File not found")
+
+    if source_path.suffix.lower() == ".wav":
+        return source_path, source_path.name
+
+    wav_name = f"{source_path.stem}.wav"
+    wav_path = safe_file_path("voice-previews", wav_name)
     if (not wav_path.exists()) or wav_path.stat().st_mtime < source_path.stat().st_mtime:
         data, sample_rate = sf.read(str(source_path), dtype="int16", always_2d=True)
         sf.write(str(wav_path), data, sample_rate, format="WAV", subtype="PCM_16")
@@ -452,10 +928,11 @@ def run_voice_preview_sync(
     finally:
         model.gr_progress = previous_progress
 
+    wav_path, wav_name = ensure_voice_preview_wav_file(output_name)
     return {
-        "audioFile": output_name,
-        "audioUrl": build_public_url("voice-previews", output_name),
-        "durationSeconds": round(sf.info(str(output_path)).duration, 2),
+        "audioFile": wav_name,
+        "audioUrl": build_public_url("voice-previews", wav_name),
+        "durationSeconds": round(sf.info(str(wav_path)).duration, 2),
         "emotionPreset": emotion_preset,
     }
 
@@ -605,6 +1082,7 @@ async def indextts_ui_css(request: web.Request):
 @PromptServer.instance.routes.get("/indextts-ui/api/config")
 async def indextts_ui_config(request: web.Request):
     ensure_webui_dirs()
+    user = get_authenticated_user(request)
     return web.json_response(
             {
                 "emotionPresets": list(EMOTION_PRESETS.keys()),
@@ -614,13 +1092,250 @@ async def indextts_ui_config(request: web.Request):
                     "mergeSilenceMs": 300,
                 },
                 "modelStatus": MODEL_STATUS,
+                "lanShare": get_lan_share_state(),
+                "auth": user,
             }
         )
+
+
+@PromptServer.instance.routes.get("/indextts-ui/api/auth-status")
+async def indextts_ui_auth_status(request: web.Request):
+    ensure_webui_dirs()
+    return web.json_response(get_authenticated_user(request))
+
+
+@PromptServer.instance.routes.post("/indextts-ui/api/register")
+async def indextts_ui_register(request: web.Request):
+    ensure_webui_dirs()
+    payload = await json_request(request)
+    username = re.sub(r"\s+", "", str(payload.get("username") or "")).strip()
+    password = str(payload.get("password") or "")
+    if not username or len(username) < 3:
+        raise web.HTTPBadRequest(text="用户名至少需要 3 个字符。")
+    if len(password) < 6:
+        raise web.HTTPBadRequest(text="密码至少需要 6 个字符。")
+
+    accounts = read_accounts()
+    users = [user for user in accounts.get("users", []) if isinstance(user, dict)]
+    if any(str(user.get("username") or "").lower() == username.lower() for user in users):
+        raise web.HTTPBadRequest(text="这个用户名已经被注册了。")
+
+    record = {
+        "username": username,
+        "passwordHash": hash_password(password),
+        "isAdmin": False,
+        "createdAt": time.time(),
+    }
+    users.append(record)
+    accounts["users"] = users
+    write_accounts(accounts)
+
+    token = secrets.token_urlsafe(32)
+    ACTIVE_SESSIONS[token] = {"username": username, "createdAt": time.time()}
+    response = web.json_response(build_user_payload(username, is_owner=False, authenticated=True, require_auth=True))
+    response.set_cookie("indextts_session", token, httponly=True, samesite="Lax", path="/")
+    return response
+
+
+@PromptServer.instance.routes.post("/indextts-ui/api/login")
+async def indextts_ui_login(request: web.Request):
+    ensure_webui_dirs()
+    payload = await json_request(request)
+    username = re.sub(r"\s+", "", str(payload.get("username") or "")).strip()
+    password = str(payload.get("password") or "")
+    accounts = read_accounts()
+    users = [user for user in accounts.get("users", []) if isinstance(user, dict)]
+    match = next((user for user in users if str(user.get("username") or "").lower() == username.lower()), None)
+    if match is None or not verify_password(password, str(match.get("passwordHash") or "")):
+        raise web.HTTPUnauthorized(text="用户名或密码不正确。")
+
+    token = secrets.token_urlsafe(32)
+    ACTIVE_SESSIONS[token] = {"username": str(match.get("username") or username), "createdAt": time.time()}
+    response = web.json_response(
+        build_user_payload(
+            str(match.get("username") or username),
+            is_owner=bool(match.get("isAdmin")),
+            authenticated=True,
+            require_auth=True,
+        )
+    )
+    response.set_cookie("indextts_session", token, httponly=True, samesite="Lax", path="/")
+    return response
+
+
+@PromptServer.instance.routes.post("/indextts-ui/api/logout")
+async def indextts_ui_logout(request: web.Request):
+    token = request.cookies.get("indextts_session", "")
+    if token:
+        ACTIVE_SESSIONS.pop(token, None)
+    response = web.json_response(build_user_payload("", is_owner=False, authenticated=False, require_auth=True))
+    response.del_cookie("indextts_session", path="/")
+    return response
+
+
+@PromptServer.instance.routes.get("/indextts-ui/api/voices")
+async def indextts_ui_list_voices(request: web.Request):
+    ensure_webui_dirs()
+    user = require_authenticated_user(request)
+    return web.json_response({"items": list_visible_voices(user)})
+
+
+@PromptServer.instance.routes.post("/indextts-ui/api/register-existing-voice")
+async def indextts_ui_register_existing_voice(request: web.Request):
+    ensure_webui_dirs()
+    user = require_authenticated_user(request)
+    if not user.get("isOwner"):
+        raise web.HTTPForbidden(text="只有本机管理员可以注册本地共享音色。")
+
+    payload = await json_request(request)
+    name = str(payload.get("name") or "").strip() or "基础音色"
+    audio_file = str(payload.get("audioFile") or "").strip()
+    if not audio_file:
+        raise web.HTTPBadRequest(text="缺少音色文件。")
+    target_path = safe_file_path("roles", audio_file)
+    if not target_path.exists():
+        raise web.HTTPBadRequest(text="找不到要注册的本地音色文件。")
+
+    library = read_voice_library()
+    voices = [item for item in library.get("voices", []) if isinstance(item, dict)]
+    existing = next((item for item in voices if item.get("audioFile") == audio_file), None)
+    if existing is not None:
+        return web.json_response({"voice": sanitize_voice_record(existing, user)})
+
+    record = {
+        "id": uuid.uuid4().hex,
+        "name": name,
+        "audioFile": audio_file,
+        "ownerUsername": "owner",
+        "isShared": True,
+        "isProtected": True,
+        "createdAt": time.time(),
+    }
+    upsert_voice_record(record)
+    return web.json_response({"voice": sanitize_voice_record(record, user)})
+
+
+@PromptServer.instance.routes.post("/indextts-ui/api/upload-voice")
+async def indextts_ui_upload_voice(request: web.Request):
+    ensure_webui_dirs()
+    user = require_authenticated_user(request)
+    reader = await request.multipart()
+    file_part = await reader.next()
+    name_part = await reader.next()
+
+    if file_part is None or file_part.name != "file":
+        raise web.HTTPBadRequest(text="Missing audio file field")
+
+    filename = file_part.filename or "voice.wav"
+    ext = Path(filename).suffix or ".wav"
+    saved_name = f"{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}{ext}"
+    saved_path = ROLE_AUDIO_DIR / saved_name
+
+    with saved_path.open("wb") as handle:
+        while True:
+            chunk = await file_part.read_chunk()
+            if not chunk:
+                break
+            handle.write(chunk)
+
+    voice_name = ""
+    if name_part is not None:
+        voice_name = (await name_part.text()).strip()
+    if not voice_name:
+        voice_name = Path(filename).stem.strip() or "基础音色"
+
+    record = {
+        "id": uuid.uuid4().hex,
+        "name": voice_name,
+        "audioFile": saved_name,
+        "ownerUsername": str(user.get("username") or ""),
+        "isShared": bool(user.get("isOwner")),
+        "isProtected": bool(user.get("isOwner")),
+        "createdAt": time.time(),
+    }
+    upsert_voice_record(record)
+    return web.json_response({"voice": sanitize_voice_record(record, user)})
+
+
+@PromptServer.instance.routes.post("/indextts-ui/api/update-voice")
+async def indextts_ui_update_voice(request: web.Request):
+    ensure_webui_dirs()
+    user = require_authenticated_user(request)
+    payload = await json_request(request)
+    voice_id = str(payload.get("voiceId") or "").strip()
+    name = str(payload.get("name") or "").strip()
+    if not voice_id:
+        raise web.HTTPBadRequest(text="缺少音色 ID。")
+    if not name:
+        raise web.HTTPBadRequest(text="音色名称不能为空。")
+
+    record = find_voice_record(voice_id)
+    if record is None:
+        raise web.HTTPNotFound(text="找不到这个音色。")
+    if not user.get("isOwner") and str(record.get("ownerUsername") or "") != str(user.get("username") or ""):
+        raise web.HTTPForbidden(text="你没有权限修改这个音色。")
+
+    record = dict(record)
+    record["name"] = name
+    upsert_voice_record(record)
+    return web.json_response({"voice": sanitize_voice_record(record, user)})
+
+
+@PromptServer.instance.routes.post("/indextts-ui/api/delete-voice")
+async def indextts_ui_delete_voice(request: web.Request):
+    ensure_webui_dirs()
+    user = require_authenticated_user(request)
+    payload = await json_request(request)
+    voice_id = str(payload.get("voiceId") or "").strip()
+    if not voice_id:
+        raise web.HTTPBadRequest(text="缺少音色 ID。")
+
+    record = find_voice_record(voice_id)
+    if record is None:
+        raise web.HTTPNotFound(text="找不到这个音色。")
+    if record.get("isProtected"):
+        raise web.HTTPForbidden(text="不能删除本机共享音色。")
+    if not user.get("isOwner") and str(record.get("ownerUsername") or "") != str(user.get("username") or ""):
+        raise web.HTTPForbidden(text="你没有权限删除这个音色。")
+
+    deleted = delete_voice_record(voice_id)
+    if deleted:
+        try:
+            audio_path = safe_file_path("roles", str(deleted.get("audioFile") or ""))
+            if audio_path.exists():
+                audio_path.unlink()
+        except Exception:
+            LOGGER.warning("Failed to delete audio file for voice %s", voice_id)
+    return web.json_response({"ok": True})
+
+
+@PromptServer.instance.routes.get("/indextts-ui/api/lan-share-status")
+async def indextts_ui_lan_share_status(request: web.Request):
+    return web.json_response(get_lan_share_state())
+
+
+@PromptServer.instance.routes.post("/indextts-ui/api/start-lan-share")
+async def indextts_ui_start_lan_share(request: web.Request):
+    payload = await json_request(request)
+    port = int(payload.get("port") or 8192)
+    if port < 1 or port > 65535:
+        raise web.HTTPBadRequest(text="Invalid port")
+    state = await asyncio.to_thread(ensure_lan_share_running, port)
+    if state.get("error"):
+        raise web.HTTPBadRequest(text=str(state["error"]))
+    return web.json_response(state)
+
+
+@PromptServer.instance.routes.post("/indextts-ui/api/stop-lan-share")
+async def indextts_ui_stop_lan_share(request: web.Request):
+    state = await asyncio.to_thread(stop_lan_share_server)
+    return web.json_response(state)
 
 
 @PromptServer.instance.routes.post("/indextts-ui/api/upload-role-audio")
 async def indextts_ui_upload_role_audio(request: web.Request):
     ensure_webui_dirs()
+    user = require_authenticated_user(request)
     reader = await request.multipart()
     file_part = await reader.next()
     if file_part is None or file_part.name != "file":
@@ -648,14 +1363,30 @@ async def indextts_ui_upload_role_audio(request: web.Request):
 
 @PromptServer.instance.routes.post("/indextts-ui/api/preview-voice")
 async def indextts_ui_preview_voice(request: web.Request):
+    user = require_authenticated_user(request)
     payload = await json_request(request)
     voice = payload.get("voice") or {}
     emotion_preset = str(payload.get("emotionPreset") or "平静")
     preview_text = str(payload.get("previewText") or "").strip()
+    preview_signature = str(payload.get("previewSignature") or "").strip()
     settings = payload.get("settings") or {}
+
+    voice_id = str(voice.get("id") or "").strip()
 
     if not voice.get("audioFile"):
         raise web.HTTPBadRequest(text="缺少音色参考音频。")
+
+    if voice_id:
+        record = find_voice_record(voice_id)
+        if record is not None:
+            owner_username = str(record.get("ownerUsername") or "")
+            current_username = str(user.get("username") or "")
+            can_access = bool(user.get("isOwner") or record.get("isShared") or owner_username == current_username)
+            if not can_access:
+                raise web.HTTPForbidden(text="你没有权限使用这个音色。")
+            cached_preview = get_cached_voice_preview(record, emotion_preset, preview_signature)
+            if cached_preview is not None:
+                return web.json_response(cached_preview)
 
     try:
         model = await get_tts_model(bool(settings.get("localFilesOnly", True)))
@@ -672,11 +1403,28 @@ async def indextts_ui_preview_voice(request: web.Request):
         LOGGER.exception("Voice preview generation failed")
         raise web.HTTPBadRequest(text=normalize_user_error(exc)) from exc
 
+    if voice_id:
+        record = find_voice_record(voice_id)
+        if record is not None:
+            record = dict(record)
+            previews = dict(record.get("previews") or {})
+            previews[emotion_preset] = {
+                "audioFile": result.get("audioFile") or "",
+                "durationSeconds": result.get("durationSeconds"),
+                "previewSignature": preview_signature,
+                "previewText": preview_text,
+                "updatedAt": time.time(),
+            }
+            record["previews"] = previews
+            upsert_voice_record(record)
+            result["previewSignature"] = preview_signature
+
     return web.json_response(result)
 
 
 @PromptServer.instance.routes.post("/indextts-ui/api/generate-line")
 async def indextts_ui_generate_line(request: web.Request):
+    require_authenticated_user(request)
     payload = await json_request(request)
     role = payload.get("role") or {}
     line = payload.get("line") or {}
@@ -737,6 +1485,7 @@ async def indextts_ui_generate_line(request: web.Request):
 
 @PromptServer.instance.routes.get("/indextts-ui/api/generation-status")
 async def indextts_ui_generation_status(request: web.Request):
+    require_authenticated_user(request)
     task_key = (request.query.get("taskKey") or "").strip()
     if not task_key:
         raise web.HTTPBadRequest(text="Missing taskKey")
@@ -752,6 +1501,7 @@ async def indextts_ui_generation_status(request: web.Request):
 
 @PromptServer.instance.routes.post("/indextts-ui/api/cancel-generation")
 async def indextts_ui_cancel_generation(request: web.Request):
+    require_authenticated_user(request)
     payload = await json_request(request)
     task_key = str(payload.get("taskKey") or "").strip()
     if not task_key:
@@ -763,6 +1513,7 @@ async def indextts_ui_cancel_generation(request: web.Request):
 
 @PromptServer.instance.routes.post("/indextts-ui/api/load-model")
 async def indextts_ui_load_model(request: web.Request):
+    require_authenticated_user(request)
     payload = await json_request(request)
     settings = payload.get("settings") or {}
     try:
@@ -775,6 +1526,7 @@ async def indextts_ui_load_model(request: web.Request):
 
 @PromptServer.instance.routes.post("/indextts-ui/api/generate-batch")
 async def indextts_ui_generate_batch(request: web.Request):
+    require_authenticated_user(request)
     payload = await json_request(request)
     roles = {role["id"]: role for role in payload.get("roles", []) if role.get("id")}
     lines = payload.get("lines", [])
@@ -803,6 +1555,7 @@ async def indextts_ui_generate_batch(request: web.Request):
 
 @PromptServer.instance.routes.post("/indextts-ui/api/merge-audios")
 async def indextts_ui_merge_audios(request: web.Request):
+    require_authenticated_user(request)
     payload = await json_request(request)
     files = payload.get("files") or []
     silence_ms = int(payload.get("silenceMs", 300))
@@ -851,6 +1604,7 @@ async def indextts_ui_merge_audios(request: web.Request):
 
 @PromptServer.instance.routes.get("/indextts-ui/api/merge-status")
 async def indextts_ui_merge_status(request: web.Request):
+    require_authenticated_user(request)
     task_key = (request.query.get("taskKey") or "").strip()
     if not task_key:
         raise web.HTTPBadRequest(text="Missing taskKey")
@@ -866,6 +1620,7 @@ async def indextts_ui_merge_status(request: web.Request):
 
 @PromptServer.instance.routes.get("/indextts-ui/api/list-merged-audios")
 async def indextts_ui_list_merged_audios(request: web.Request):
+    require_authenticated_user(request)
     ensure_webui_dirs()
     items: list[dict[str, object]] = []
     for path in sorted(MERGED_AUDIO_DIR.glob("*.wav"), key=lambda item: item.stat().st_mtime, reverse=True):
@@ -884,6 +1639,7 @@ async def indextts_ui_list_merged_audios(request: web.Request):
 
 @PromptServer.instance.routes.get("/indextts-ui/api/file/{bucket}/{filename}")
 async def indextts_ui_file(request: web.Request):
+    require_authenticated_user(request)
     bucket = request.match_info["bucket"]
     filename = request.match_info["filename"]
     path = safe_file_path(bucket, filename)
@@ -894,6 +1650,7 @@ async def indextts_ui_file(request: web.Request):
 
 @PromptServer.instance.routes.get("/indextts-ui/api/generated-wav/{filename}")
 async def indextts_ui_generated_wav(request: web.Request):
+    require_authenticated_user(request)
     filename = request.match_info["filename"]
     wav_path, wav_name = ensure_generated_wav_file(filename)
     return web.FileResponse(

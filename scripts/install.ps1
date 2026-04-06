@@ -59,7 +59,7 @@ function Resolve-Python312 {
 }
 
 $pythonExe = Resolve-Python312
-$tempRoot = Join-Path $env:TEMP ("indextts-install-" + [guid]::NewGuid().ToString("N"))
+$tempRoot = Join-Path (Join-Path $InstallDir "_runtime\\downloads") ("installer-temp-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tempRoot | Out-Null
 
 try {

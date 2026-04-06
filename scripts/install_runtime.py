@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -26,9 +27,34 @@ TOP_LEVEL_EXCLUDES = {
 }
 
 
-def run(cmd: list[str], cwd: Path | None = None) -> None:
+def build_runtime_env(install_dir: Path) -> dict[str, str]:
+    cache_root = install_dir / "_runtime" / "cache"
+    pip_cache = cache_root / "pip"
+    hf_home = cache_root / "huggingface"
+    hub_cache = hf_home / "hub"
+    transformers_cache = hf_home / "transformers"
+    torch_home = cache_root / "torch"
+    temp_root = cache_root / "temp"
+
+    for path in (pip_cache, hf_home, hub_cache, transformers_cache, torch_home, temp_root):
+        path.mkdir(parents=True, exist_ok=True)
+
+    env = os.environ.copy()
+    env["PIP_CACHE_DIR"] = str(pip_cache)
+    env["HF_HOME"] = str(hf_home)
+    env["HUGGINGFACE_HUB_CACHE"] = str(hub_cache)
+    env["TRANSFORMERS_CACHE"] = str(transformers_cache)
+    env["TORCH_HOME"] = str(torch_home)
+    env["XDG_CACHE_HOME"] = str(cache_root)
+    env["TMP"] = str(temp_root)
+    env["TEMP"] = str(temp_root)
+    env["TMPDIR"] = str(temp_root)
+    return env
+
+
+def run(cmd: list[str], cwd: Path | None = None, env: dict[str, str] | None = None) -> None:
     print(f"> {' '.join(cmd)}")
-    subprocess.run(cmd, cwd=str(cwd) if cwd else None, check=True)
+    subprocess.run(cmd, cwd=str(cwd) if cwd else None, check=True, env=env)
 
 
 def ensure_clean_dir(path: Path) -> None:
@@ -64,7 +90,10 @@ def install_comfyui(runtime_dir: Path) -> None:
     print(f"Downloading ComfyUI {COMFYUI_COMMIT} ...")
     download_file(COMFYUI_ARCHIVE_URL, archive_path)
 
-    with tempfile.TemporaryDirectory(prefix="comfyui-extract-") as temp_dir_raw:
+    temp_base = runtime_dir / "downloads" / "extract-temp"
+    temp_base.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory(prefix="comfyui-extract-", dir=str(temp_base)) as temp_dir_raw:
         temp_dir = Path(temp_dir_raw)
         with zipfile.ZipFile(archive_path) as archive:
             archive.extractall(temp_dir)
@@ -101,8 +130,9 @@ def build_filtered_requirements(source: Path, destination: Path, blocked_names: 
 def install_python_dependencies(source_dir: Path, install_dir: Path, venv_python: Path, torch_backend: str) -> None:
     runtime_dir = install_dir / "_runtime"
     comfy_dir = runtime_dir / "ComfyUI"
+    runtime_env = build_runtime_env(install_dir)
 
-    run([str(venv_python), "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools"])
+    run([str(venv_python), "-m", "pip", "install", "--upgrade", "pip", "wheel", "setuptools"], env=runtime_env)
 
     if torch_backend == "cu128":
         run(
@@ -116,7 +146,8 @@ def install_python_dependencies(source_dir: Path, install_dir: Path, venv_python
                 "torchaudio==2.9.0",
                 "--index-url",
                 "https://download.pytorch.org/whl/cu128",
-            ]
+            ],
+            env=runtime_env,
         )
     else:
         run(
@@ -128,7 +159,8 @@ def install_python_dependencies(source_dir: Path, install_dir: Path, venv_python
                 "torch==2.9.0",
                 "torchvision==0.24.0",
                 "torchaudio==2.9.0",
-            ]
+            ],
+            env=runtime_env,
         )
 
     comfy_requirements = runtime_dir / "comfyui.requirements.filtered.txt"
@@ -137,7 +169,7 @@ def install_python_dependencies(source_dir: Path, install_dir: Path, venv_python
         comfy_requirements,
         ("torch", "torchaudio", "torchvision", "transformers"),
     )
-    run([str(venv_python), "-m", "pip", "install", "-r", str(comfy_requirements)])
+    run([str(venv_python), "-m", "pip", "install", "-r", str(comfy_requirements)], env=runtime_env)
 
     plugin_requirements = runtime_dir / "plugin.requirements.filtered.txt"
     build_filtered_requirements(
@@ -145,8 +177,8 @@ def install_python_dependencies(source_dir: Path, install_dir: Path, venv_python
         plugin_requirements,
         ("torch", "torchaudio", "torchvision", "transformers"),
     )
-    run([str(venv_python), "-m", "pip", "install", "-r", str(plugin_requirements)])
-    run([str(venv_python), "-m", "pip", "install", "transformers<=4.57.1"])
+    run([str(venv_python), "-m", "pip", "install", "-r", str(plugin_requirements)], env=runtime_env)
+    run([str(venv_python), "-m", "pip", "install", "transformers<=4.57.1"], env=runtime_env)
 
 
 def install_plugin(source_dir: Path, install_dir: Path) -> None:
@@ -158,6 +190,7 @@ def install_plugin(source_dir: Path, install_dir: Path) -> None:
 
 def predownload_models(venv_python: Path, install_dir: Path) -> None:
     model_dir = install_dir / "_runtime" / "ComfyUI" / "models" / "indextts"
+    runtime_env = build_runtime_env(install_dir)
     helper = textwrap.dedent(
         f"""
         from huggingface_hub import hf_hub_download, snapshot_download
@@ -197,7 +230,7 @@ def predownload_models(venv_python: Path, install_dir: Path) -> None:
         print("model download completed")
         """
     )
-    run([str(venv_python), "-c", helper])
+    run([str(venv_python), "-c", helper], env=runtime_env)
 
 
 def write_launchers(install_dir: Path) -> None:
