@@ -13,6 +13,8 @@
   mergedAudios: [],
   mergeTask: null,
   voicePickerRoleId: "",
+  roleCategoryFilter: "__all__",
+  roleManagerCategoryFilter: "__all__",
   isGeneratingAll: false,
   batchGenerationTask: null,
   currentProjectId: "",
@@ -32,6 +34,22 @@
     isOwner: false,
     mode: "login",
   },
+  azureTts: {
+    configured: false,
+    enabled: false,
+    region: "eastus",
+    defaultVoice: "zh-CN-XiaoxiaoNeural",
+    voices: [],
+  },
+  voicePreviewFilesVoiceId: "",
+  voicePreviewPlaying: {
+    voiceId: "",
+    emotion: "",
+  },
+  voicePreviewFocus: {
+    voiceId: "",
+    emotion: "",
+  },
 };
 
 const GENERATION_POLL_INTERVAL_MS = 600;
@@ -40,6 +58,7 @@ const VOICE_PREVIEW_SIGNATURE_VERSION = 4;
 const EMOTION_PRESET_SIGNATURE_VERSION = 2;
 const WORKSPACE_STORAGE_KEY = "indextts_ui_state";
 const PROJECTS_STORAGE_KEY = "indextts_ui_projects";
+const LAYOUT_ROLES_WIDTH_STORAGE_KEY = "indextts_ui_roles_width";
 const AUTO_SAVE_INTERVAL_MS = 60 * 1000;
 let generationPollTimer = null;
 let autoSaveTimer = null;
@@ -68,13 +87,108 @@ const DEFAULT_VOICE_PREVIEW_TEXTS = {
   惊讶: "什么？居然会变成这样，这真的太让人意外了。",
   癫狂: "哈哈哈，既然如此，那就让一切彻底失控吧！",
 };
+const VOICE_GENDER_OPTIONS = ["", "男", "女"];
+const VOICE_AGE_OPTIONS = ["", "儿童", "年轻人", "中年人", "老年人"];
+const VOICE_LANGUAGE_OPTIONS = ["", "中文", "英文", "日文", "韩文", "粤语", "中英双语", "多语言"];
+const VOICE_EMOTION_MODE_OPTIONS = ["默认", "多情绪"];
+const VOICE_SOURCE_FILTER_OPTIONS = ["全部", "本地音色", "微软/Azure"];
+const VOICE_GENDER_FILTER_OPTIONS = ["全部", "男", "女"];
+const VOICE_AGE_FILTER_OPTIONS = ["全部", "儿童", "年轻人", "中年人", "老年人"];
+const VOICE_LANGUAGE_FILTER_OPTIONS = ["全部", "中文", "英文", "日文", "韩文", "粤语", "中英双语", "多语言"];
+const VOICE_EMOTION_MODE_FILTER_OPTIONS = ["全部", "默认", "多情绪"];
+const AZURE_STYLE_LABELS = {
+  affectionate: "温柔",
+  "advertisement-upbeat": "广告活力",
+  angry: "生气",
+  anxious: "焦虑",
+  assassin: "刺客",
+  assistant: "助手",
+  boy: "男孩",
+  calm: "平静",
+  captain: "队长",
+  cavalier: "骑士",
+  cheerful: "开心",
+  "chat-casual": "闲聊",
+  comforting: "安慰",
+  complaining: "抱怨",
+  curious: "好奇",
+  customerservice: "客服",
+  "customer-service": "客服",
+  debating: "辩论",
+  depressed: "沮丧",
+  disappointed: "失望",
+  "disgruntled": "不满",
+  "documentary-narration": "纪录片旁白",
+  embarrassed: "尴尬",
+  empathetic: "共情",
+  envious: "羡慕",
+  encouraging: "鼓励",
+  excited: "激动",
+  fearful: "害怕",
+  friendly: "友好",
+  "game-narrator": "游戏旁白",
+  gentle: "轻柔",
+  geomancer: "术士",
+  girl: "女孩",
+  guilty: "内疚",
+  happy: "开心",
+  "live-commercial": "直播带货",
+  livecommercial: "直播带货",
+  lonely: "孤独",
+  lyrical: "抒情",
+  "narration-professional": "专业旁白",
+  "narration-relaxed": "轻松旁白",
+  narrator: "旁白",
+  news: "新闻",
+  newscast: "新闻播报",
+  "newscast-casual": "轻松新闻",
+  "older-adult-female": "老年女性",
+  "older-adult-male": "老年男性",
+  sad: "悲伤",
+  serious: "严肃",
+  shy: "害羞",
+  "sports-commentary": "体育解说",
+  "sports-commentary-excited": "激动体育解说",
+  strict: "严格",
+  surprised: "惊讶",
+  "senior-female": "高龄女性",
+  "senior-male": "高龄男性",
+  sentimental: "伤感",
+  whispering: "耳语",
+  chat: "聊天",
+  poet: "诗人",
+  prince: "王子",
+  "story-telling": "讲述",
+  "poetry-reading": "诗朗读",
+  sorry: "抱歉",
+  tired: "疲惫",
+  "voice-assistant": "语音助手",
+  "young-adult-female": "年轻女性",
+  "young-adult-male": "年轻男性",
+};
 
 const els = {
   roleList: document.querySelector("#roleList"),
   lineList: document.querySelector("#lineList"),
   addRoleBtn: document.querySelector("#addRoleBtn"),
+  roleManagerBtn: null,
+  roleManagerModal: null,
+  closeRoleManagerModalBtn: null,
+  roleManagerCategoryFilter: null,
+  roleManagerTabs: null,
+  roleManagerSelectAll: null,
+  roleManagerNewCategoryInput: null,
+  roleManagerAssignBtn: null,
+  roleCategoryTabs: null,
+  roleManagerList: null,
+  saveRoleManagerBtn: null,
+  exportRolesBtn: null,
+  exportRoleCategoryBtn: null,
+  importRolesBtn: null,
+  importRolesInput: null,
   addLineBtn: document.querySelector("#addLineBtn"),
   openProjectManagerBtn: document.querySelector("#openProjectManagerBtn"),
+  newProjectBtn: document.querySelector("#newProjectBtn"),
   saveCurrentProjectBtn: document.querySelector("#saveCurrentProjectBtn"),
   closeCurrentProjectBtn: document.querySelector("#closeCurrentProjectBtn"),
   clearCurrentDialoguesBtn: document.querySelector("#clearCurrentDialoguesBtn"),
@@ -165,11 +279,41 @@ const els = {
   voiceUploadInput: null,
   voiceUploadBtn: null,
   voicePreviewText: null,
+  voiceSearchInput: null,
+  voiceSourceFilter: null,
+  voiceGenderFilter: null,
+  voiceAgeFilter: null,
+  voiceLanguageFilter: null,
+  voiceEmotionModeFilter: null,
+  voiceSourceFilterGroup: null,
+  voiceGenderFilterGroup: null,
+  voiceAgeFilterGroup: null,
+  voiceLanguageFilterGroup: null,
+  voiceEmotionModeFilterGroup: null,
+  layoutResizeHandle: null,
   voiceCenterList: null,
+  voicePreviewFilesModal: null,
+  closeVoicePreviewFilesModalBtn: null,
+  voicePreviewFilesTitle: null,
+  voicePreviewFilesBody: null,
+  voiceAttributesModal: null,
+  closeVoiceAttributesModalBtn: null,
+  voiceAttributesTitle: null,
+  voiceGenderSelect: null,
+  voiceAgeSelect: null,
+  voiceLanguageSelect: null,
+  voiceEmotionModeSelect: null,
+  cancelVoiceAttributesBtn: null,
+  saveVoiceAttributesBtn: null,
+  deleteConfirmModal: null,
+  deleteConfirmTitle: null,
+  deleteConfirmMessage: null,
+  cancelDeleteConfirmBtn: null,
+  confirmDeleteConfirmBtn: null,
 };
 
 function anyModalOpen() {
-  return [els.scriptImportModal, els.downloadListModal, els.mergedAudiosModal, els.voiceCenterModal, els.settingsModal, els.projectManagerModal, els.saveProjectModal, els.pronunciationModal]
+  return [els.scriptImportModal, els.downloadListModal, els.mergedAudiosModal, els.voiceCenterModal, els.roleManagerModal, els.settingsModal, els.projectManagerModal, els.saveProjectModal, els.pronunciationModal, els.voicePreviewFilesModal, els.voiceAttributesModal, els.deleteConfirmModal]
     .filter(Boolean)
     .some((modal) => !modal.classList.contains("hidden"));
 }
@@ -198,6 +342,11 @@ function formatEmotionLabel(emotion) {
   return emoji ? `${emoji} ${emotion}` : emotion;
 }
 
+function formatAzureStyleLabel(style) {
+  const key = String(style || "");
+  return AZURE_STYLE_LABELS[key] || AZURE_STYLE_LABELS[key.toLowerCase()] || key;
+}
+
 function stopVoicePreviewPlayback(targetVoiceId = "") {
   if (!els.voiceCenterList) return;
   const players = els.voiceCenterList.querySelectorAll("[data-voice-player]");
@@ -211,9 +360,12 @@ function stopVoicePreviewPlayback(targetVoiceId = "") {
       // Ignore player reset failures from detached or not-yet-ready nodes.
     }
   });
+  if (!targetVoiceId || state.voicePreviewPlaying.voiceId === targetVoiceId) {
+    state.voicePreviewPlaying = { voiceId: "", emotion: "" };
+  }
 }
 
-function loadAndPlayVoicePreview(player, audioUrl) {
+function loadAndPlayVoicePreview(player, audioUrl, voiceId = "", emotion = "") {
   if (!(player instanceof HTMLAudioElement) || !audioUrl) return;
   try {
     player.pause();
@@ -227,19 +379,544 @@ function loadAndPlayVoicePreview(player, audioUrl) {
   } catch (_) {
     // noop
   }
+  state.voicePreviewPlaying = { voiceId, emotion };
+  player.onended = () => {
+    if (state.voicePreviewPlaying.voiceId === voiceId && state.voicePreviewPlaying.emotion === emotion) {
+      state.voicePreviewPlaying = { voiceId: "", emotion: "" };
+      if (!updateVoiceCenterCard(voiceId)) renderVoiceCenter();
+    }
+  };
   player.play().catch(() => {});
 }
 
-function getCachedVoicePreview(voice, emotionPreset = "") {
+function isVoicePreviewPlaying(voiceId, emotion = "") {
+  return state.voicePreviewPlaying.voiceId === voiceId && state.voicePreviewPlaying.emotion === emotion;
+}
+
+function focusVoicePreviewChip(voiceId, emotion = "") {
+  if (!els.voiceCenterList || !voiceId) return;
+  state.voicePreviewFocus = { voiceId, emotion };
+  requestAnimationFrame(() => {
+    const selector = `[data-preview-voice="${CSS.escape(voiceId)}"][data-preview-emotion="${CSS.escape(emotion)}"]`;
+    const chip = els.voiceCenterList.querySelector(selector);
+    if (!(chip instanceof HTMLElement)) return;
+    chip.focus({ preventScroll: true });
+    chip.scrollIntoView({ block: "nearest", inline: "nearest" });
+  });
+}
+
+function getCachedVoicePreview(voice, emotionPreset = "", options = {}) {
   if (!voice) return null;
+  const { strictSignature = false } = options;
   const targetEmotion = emotionPreset || voice.previewActiveEmotion || "";
   if (!targetEmotion) return null;
   const cached = voice.previews?.[targetEmotion];
   const signature = getVoicePreviewSignature(voice, targetEmotion);
-  if (cached?.audioUrl && cached.previewSignature === signature) {
+  if (cached?.audioUrl && (!strictSignature || cached.previewSignature === signature)) {
     return { ...cached, emotionPreset: targetEmotion };
   }
   return null;
+}
+
+function getCurrentVoicePreview(voice) {
+  if (!voice) return null;
+  return getCachedVoicePreview(voice, voice.previewActiveEmotion || "") || getCachedVoicePreview(voice);
+}
+
+function getAnyVoicePreview(voice) {
+  if (!voice?.previews) return null;
+  for (const preset of state.emotionPresets) {
+    const cached = getCachedVoicePreview(voice, preset);
+    if (cached?.audioUrl) return cached;
+  }
+  return null;
+}
+
+function clearVoicePreviewCache(voice, emotionPreset = "") {
+  if (!voice) return;
+  const targetEmotion = emotionPreset || voice.previewActiveEmotion || "";
+  if (!targetEmotion) return;
+  if (voice.previews?.[targetEmotion]) {
+    delete voice.previews[targetEmotion];
+  }
+  if (voice.previewActiveEmotion === targetEmotion) {
+    voice.previewActiveEmotion = "";
+    voice.previewActiveUrl = "";
+  }
+  saveState();
+}
+
+async function openVoicePreviewFile(voiceId) {
+  const voice = getVoiceById(voiceId);
+  const cachedPreview = getCurrentVoicePreview(voice);
+  if (!voice || !cachedPreview?.audioUrl) {
+    showToast("当前还没有可打开的试听文件。", true);
+    return;
+  }
+  try {
+    const response = await fetch(cachedPreview.audioUrl, { method: "HEAD", cache: "no-store" });
+    if (!response.ok) {
+      throw new Error("missing");
+    }
+    window.open(cachedPreview.audioUrl, "_blank", "noopener,noreferrer");
+  } catch (_) {
+    clearVoicePreviewCache(voice, cachedPreview.emotionPreset || voice.previewActiveEmotion || "");
+    if (!updateVoiceCenterCard(voice.id)) {
+      renderVoiceCenter();
+    }
+    showToast("试听文件已不存在，请重新点击情绪生成。", true);
+  }
+}
+
+function getVoicePreviewItems(voice) {
+  if (!voice) return [];
+  return state.emotionPresets
+    .map((emotionPreset) => {
+      const preview = getCachedVoicePreview(voice, emotionPreset);
+      return {
+        emotionPreset,
+        label: formatEmotionLabel(emotionPreset),
+        audioFile: preview?.audioFile || "",
+        audioUrl: preview?.audioUrl || "",
+        durationSeconds: preview?.durationSeconds,
+        exists: Boolean(preview?.audioUrl),
+      };
+    });
+}
+
+function closeVoicePreviewFilesModal() {
+  if (!els.voicePreviewFilesModal) return;
+  state.voicePreviewFilesVoiceId = "";
+  els.voicePreviewFilesModal.classList.add("hidden");
+  els.voicePreviewFilesModal.setAttribute("aria-hidden", "true");
+  syncBodyModalLock();
+}
+
+function getVoiceAttributes(voice = {}) {
+  const emotionMode = voice.attributes?.emotionMode || voice.emotionMode
+    || (voice.source === "azure" && Array.isArray(voice.azureMeta?.styles) && voice.azureMeta.styles.length ? "多情绪" : "默认");
+  return {
+    gender: voice.attributes?.gender || voice.gender || "",
+    ageGroup: voice.attributes?.ageGroup || voice.ageGroup || "",
+    language: voice.attributes?.language || voice.language || "",
+    emotionMode,
+  };
+}
+
+function createOptionsHtml(options, value) {
+  return options.map((item) => {
+    const label = item || "未设置";
+    return `<option value="${item}"${item === value ? " selected" : ""}>${label}</option>`;
+  }).join("");
+}
+
+function escapeHtml(value = "") {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function createFilterPillsHtml(name, options) {
+  return options.map((item, index) => {
+    const value = item === "全部" ? "" : item;
+    return `<button class="voice-filter-pill${index === 0 ? " active" : ""}" type="button" data-filter-name="${name}" data-filter-value="${value}">${item}</button>`;
+  }).join("");
+}
+
+function ensureVoiceAttributesUI() {
+  if (els.voiceAttributesModal) return;
+  const modal = document.createElement("div");
+  modal.id = "voiceAttributesModal";
+  modal.className = "modal hidden";
+  modal.setAttribute("aria-hidden", "true");
+  modal.innerHTML = `
+    <div class="modal-backdrop" data-close-modal="voice-attributes"></div>
+    <div class="modal-panel modal-panel-narrow" role="dialog" aria-modal="true" aria-labelledby="voiceAttributesTitle">
+      <div class="modal-head">
+        <div>
+          <h3 id="voiceAttributesTitle">音色属性</h3>
+          <p>这些标签只用于本地管理音色，不影响模型推理。</p>
+        </div>
+        <button id="closeVoiceAttributesModalBtn" class="icon" type="button" title="关闭">×</button>
+      </div>
+      <div class="field-stack">
+        <span>性别</span>
+        <select id="voiceGenderSelect"></select>
+      </div>
+      <div class="field-stack">
+        <span>年龄阶段</span>
+        <select id="voiceAgeSelect"></select>
+      </div>
+      <div class="field-stack">
+        <span>语言</span>
+        <select id="voiceLanguageSelect"></select>
+      </div>
+      <div class="field-stack">
+        <span>多情绪</span>
+        <select id="voiceEmotionModeSelect"></select>
+      </div>
+      <div class="modal-actions">
+        <button id="cancelVoiceAttributesBtn" class="secondary" type="button">取消</button>
+        <button id="saveVoiceAttributesBtn" class="primary" type="button">保存</button>
+      </div>
+    </div>
+  `;
+  document.body.append(modal);
+  els.voiceAttributesModal = modal;
+  els.closeVoiceAttributesModalBtn = modal.querySelector("#closeVoiceAttributesModalBtn");
+  els.voiceAttributesTitle = modal.querySelector("#voiceAttributesTitle");
+  els.voiceGenderSelect = modal.querySelector("#voiceGenderSelect");
+  els.voiceAgeSelect = modal.querySelector("#voiceAgeSelect");
+  els.voiceLanguageSelect = modal.querySelector("#voiceLanguageSelect");
+  els.voiceEmotionModeSelect = modal.querySelector("#voiceEmotionModeSelect");
+  els.cancelVoiceAttributesBtn = modal.querySelector("#cancelVoiceAttributesBtn");
+  els.saveVoiceAttributesBtn = modal.querySelector("#saveVoiceAttributesBtn");
+}
+
+function openVoiceAttributesModal(voiceId) {
+  if (!state.auth.isOwner) return;
+  ensureVoiceAttributesUI();
+  const voice = getVoiceById(voiceId);
+  if (!voice) return;
+  state.voiceAttributesVoiceId = voiceId;
+  const attrs = getVoiceAttributes(voice);
+  els.voiceAttributesTitle.textContent = `${voice.name || "基础音色"} · 属性设置`;
+  els.voiceGenderSelect.innerHTML = createOptionsHtml(VOICE_GENDER_OPTIONS, attrs.gender);
+  els.voiceAgeSelect.innerHTML = createOptionsHtml(VOICE_AGE_OPTIONS, attrs.ageGroup);
+  els.voiceLanguageSelect.innerHTML = createOptionsHtml(VOICE_LANGUAGE_OPTIONS, attrs.language || "中文");
+  els.voiceEmotionModeSelect.innerHTML = createOptionsHtml(VOICE_EMOTION_MODE_OPTIONS, attrs.emotionMode || "默认");
+  els.voiceAttributesModal.classList.remove("hidden");
+  els.voiceAttributesModal.setAttribute("aria-hidden", "false");
+  syncBodyModalLock();
+}
+
+function closeVoiceAttributesModal() {
+  if (!els.voiceAttributesModal) return;
+  state.voiceAttributesVoiceId = "";
+  els.voiceAttributesModal.classList.add("hidden");
+  els.voiceAttributesModal.setAttribute("aria-hidden", "true");
+  syncBodyModalLock();
+}
+
+function updateVoiceFilterPills(name, value) {
+  const groupMap = {
+    source: els.voiceSourceFilterGroup,
+    gender: els.voiceGenderFilterGroup,
+    ageGroup: els.voiceAgeFilterGroup,
+    language: els.voiceLanguageFilterGroup,
+    emotionMode: els.voiceEmotionModeFilterGroup,
+  };
+  const hiddenMap = {
+    source: els.voiceSourceFilter,
+    gender: els.voiceGenderFilter,
+    ageGroup: els.voiceAgeFilter,
+    language: els.voiceLanguageFilter,
+    emotionMode: els.voiceEmotionModeFilter,
+  };
+  const group = groupMap[name];
+  const hidden = hiddenMap[name];
+  if (hidden) hidden.value = value || "";
+  group?.querySelectorAll(".voice-filter-pill").forEach((button) => {
+    button.classList.toggle("active", (button.dataset.filterValue || "") === (value || ""));
+  });
+}
+
+function getVoiceAttributeLabel(voice = {}) {
+  const attrs = getVoiceAttributes(voice);
+  return [attrs.gender, attrs.ageGroup, attrs.language].filter(Boolean).join(" / ");
+}
+
+function getVoiceSourceLabel(voice = {}) {
+  return voice.source === "azure" ? "微软/Azure" : "本地音色";
+}
+
+function getAzurePreviewKey(style = "") {
+  return style || "__default__";
+}
+
+function getAzureCachedPreview(voice = {}, style = "") {
+  const previews = voice.azureMeta?.previews || {};
+  return previews[getAzurePreviewKey(style)] || null;
+}
+
+function getAzureVoiceMeta(shortName = "") {
+  return (state.azureTts.voices || []).find((voice) => (voice.name || voice.shortName) === shortName) || null;
+}
+
+function getAzureVoiceLabel(shortName = "") {
+  const meta = getAzureVoiceMeta(shortName);
+  return meta?.label || meta?.localName || meta?.displayName || shortName || "Azure TTS";
+}
+
+function getRoleEmotionOptions(roleOrResolved = null) {
+  const role = roleOrResolved || {};
+  if ((role.ttsEngine || "local") === "azure") {
+    const styles = getAzureVoiceMeta(role.azureVoice || "")?.styles || [];
+    return [
+      { value: "", label: "默认" },
+      ...styles.map((style) => ({ value: style, label: formatAzureStyleLabel(style) })),
+    ];
+  }
+  return state.emotionPresets.map((preset) => ({ value: preset, label: formatEmotionLabel(preset) }));
+}
+
+function normalizeEmotionForRole(roleOrResolved = null, value = "") {
+  const options = getRoleEmotionOptions(roleOrResolved);
+  if (options.some((option) => option.value === value)) return value;
+  return options[0]?.value || "";
+}
+
+function getAzureVirtualVoices() {
+  return (state.azureTts.voices || []).map((voice) => ({
+    id: `azure:${voice.name || voice.shortName}`,
+    source: "azure",
+    name: voice.label || voice.localName || voice.displayName || voice.name || voice.shortName,
+    azureVoice: voice.name || voice.shortName,
+    shortName: voice.name || voice.shortName,
+    previewActiveEmotion: voice.previewStyle || "",
+    previewActiveUrl: (voice.previews?.[getAzurePreviewKey(voice.previewStyle || "")]?.audioUrl || voice.previewAudioUrl || ""),
+    audioFile: "",
+    audioUrl: "",
+    audioExists: true,
+    canDelete: false,
+    isShared: true,
+    ownerUsername: "Azure",
+    attributes: {
+      gender: voice.gender || "",
+      ageGroup: voice.ageGroup || "中年人",
+      language: voice.language || "中文",
+      emotionMode: voice.emotionMode || (Array.isArray(voice.styles) && voice.styles.length ? "多情绪" : "默认"),
+    },
+    azureMeta: voice,
+  })).filter((voice) => voice.azureVoice);
+}
+
+function getVoiceCenterItems() {
+  return [
+    ...state.voices.map((voice) => ({ ...voice, source: voice.source || "local" })),
+    ...getAzureVirtualVoices(),
+  ];
+}
+
+function voiceMatchesFilters(voice = {}) {
+  const query = (els.voiceSearchInput?.value || "").trim().toLowerCase();
+  const source = els.voiceSourceFilter?.value || "";
+  const gender = els.voiceGenderFilter?.value || "";
+  const ageGroup = els.voiceAgeFilter?.value || "";
+  const language = els.voiceLanguageFilter?.value || "";
+  const emotionMode = els.voiceEmotionModeFilter?.value || "";
+  const attrs = getVoiceAttributes(voice);
+  if (source && getVoiceSourceLabel(voice) !== source) return false;
+  if (query) {
+    const azureMeta = voice.azureMeta || {};
+    const haystack = `${voice.name || ""} ${voice.audioFile || ""} ${voice.shortName || ""} ${azureMeta.displayName || ""} ${azureMeta.localeName || ""} ${getVoiceSourceLabel(voice)} ${getVoiceAttributeLabel(voice)}`.toLowerCase();
+    if (!haystack.includes(query)) return false;
+  }
+  if (gender && attrs.gender !== gender) return false;
+  if (ageGroup && attrs.ageGroup !== ageGroup) return false;
+  if (language && attrs.language !== language) return false;
+  if (emotionMode && attrs.emotionMode !== emotionMode) return false;
+  return true;
+}
+
+async function saveVoiceAttributes() {
+  const voice = getVoiceById(state.voiceAttributesVoiceId);
+  if (!voice) return;
+  const attributes = {
+    gender: els.voiceGenderSelect.value,
+    ageGroup: els.voiceAgeSelect.value,
+    language: els.voiceLanguageSelect.value || "中文",
+    emotionMode: els.voiceEmotionModeSelect.value || "默认",
+  };
+  setButtonBusy(els.saveVoiceAttributesBtn, true, "保存中...");
+  try {
+    if (voice.source === "azure") {
+      const result = await fetchJson("/indextts-ui/api/update-azure-voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shortName: voice.azureVoice || voice.shortName, attributes }),
+      });
+      const updated = result.voice || null;
+      const index = state.azureTts.voices.findIndex((item) => (item.name || item.shortName) === (voice.azureVoice || voice.shortName));
+      if (index >= 0 && updated) {
+        state.azureTts.voices[index] = { ...state.azureTts.voices[index], ...updated };
+      }
+    } else {
+      const result = await fetchJson("/indextts-ui/api/update-voice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voiceId: voice.id, name: voice.name, attributes }),
+      });
+      const updated = result.voice || null;
+      if (updated) {
+        const index = state.voices.findIndex((item) => item.id === voice.id);
+        if (index >= 0) {
+          state.voices[index] = createVoice({ ...state.voices[index], ...updated });
+        }
+      } else {
+        voice.attributes = attributes;
+      }
+    }
+    saveState();
+    updateVoiceCenterCard(voice.id);
+    closeVoiceAttributesModal();
+    showToast("音色属性已保存。");
+  } catch (error) {
+    showToast(error.message, true);
+  } finally {
+    setButtonBusy(els.saveVoiceAttributesBtn, false, "保存中...", "保存");
+  }
+}
+
+async function renameAzureVoice(voice, nextName) {
+  const label = (nextName || "").trim();
+  if (!label) throw new Error("音色名称不能为空。");
+  const shortName = voice.azureVoice || voice.shortName;
+  const result = await fetchJson("/indextts-ui/api/update-azure-voice", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ shortName, label }),
+  });
+  const updated = result.voice || {};
+  const index = state.azureTts.voices.findIndex((item) => (item.name || item.shortName) === shortName);
+  if (index >= 0) {
+    state.azureTts.voices[index] = { ...state.azureTts.voices[index], ...updated };
+  }
+  saveState();
+  renderRoles();
+  return updated.label || label;
+}
+
+async function previewAzureVoice(voiceId, { autoplay = true, forceRegenerate = false, style = "" } = {}) {
+  const voice = getVoiceById(voiceId);
+  if (!voice || voice.source !== "azure") return false;
+  if (autoplay && isVoicePreviewPlaying(voice.id, style) && !forceRegenerate) {
+    stopVoicePreviewPlayback(voice.id);
+    if (!updateVoiceCenterCard(voice.id)) renderVoiceCenter();
+    return true;
+  }
+  voice.previewActiveEmotion = style;
+  voice.previewPendingEmotion = style || "Azure";
+  focusVoicePreviewChip(voice.id, style);
+  if (!updateVoiceCenterCard(voice.id)) renderVoiceCenter();
+  try {
+    const result = await fetchJson("/indextts-ui/api/preview-azure-voice", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        shortName: voice.azureVoice || voice.shortName,
+        previewText: "这是一段微软 Azure 在线语音试听。",
+        style,
+        forceRegenerate,
+      }),
+    });
+    const index = state.azureTts.voices.findIndex((item) => (item.name || item.shortName) === (voice.azureVoice || voice.shortName));
+    if (index >= 0) {
+      state.azureTts.voices[index] = {
+        ...state.azureTts.voices[index],
+        previews: result.previews || state.azureTts.voices[index].previews || {},
+        previewAudioUrl: result.audioUrl,
+        previewAudioFile: result.audioFile,
+        previewDurationSeconds: result.durationSeconds,
+        previewStyle: style,
+      };
+    }
+    voice.previewActiveUrl = result.audioUrl;
+    if (!updateVoiceCenterCard(voice.id)) renderVoiceCenter();
+    const player = els.voiceCenterList.querySelector(`[data-voice-player="${CSS.escape(voice.id)}"]`);
+    if (player && autoplay) {
+      loadAndPlayVoicePreview(player, result.audioUrl, voice.id, style);
+    }
+    return true;
+  } catch (error) {
+    showToast(error.message, true);
+    return false;
+  } finally {
+    voice.previewPendingEmotion = "";
+    if (!updateVoiceCenterCard(voice.id)) renderVoiceCenter();
+  }
+}
+
+function renderVoicePreviewFilesModal() {
+  if (!els.voicePreviewFilesBody || !els.voicePreviewFilesTitle) return;
+  const voice = getVoiceById(state.voicePreviewFilesVoiceId);
+  const items = getVoicePreviewItems(voice);
+  els.voicePreviewFilesTitle.textContent = voice ? `${voice.name} · 试听文件夹` : "试听文件夹";
+  els.voicePreviewFilesBody.innerHTML = "";
+
+  if (!voice || !items.length) {
+    const empty = document.createElement("div");
+    empty.className = "download-item";
+    empty.innerHTML = `
+      <div class="download-item-main">
+        <div class="download-item-title">还没有可查看的试听文件</div>
+        <div class="download-item-meta">先点击下面的情绪按钮生成试听。之后会按音色分别保存到独立文件夹里。</div>
+      </div>
+    `;
+    els.voicePreviewFilesBody.append(empty);
+    return;
+  }
+
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = `download-item voice-preview-file-item${item.exists ? "" : " missing"}`;
+    row.innerHTML = item.exists
+      ? `
+        <div class="download-item-main">
+          <div class="download-item-title">${item.label}</div>
+          <div class="download-item-meta">${item.audioFile}${item.durationSeconds ? ` · ${item.durationSeconds}s` : ""}</div>
+          <audio controls preload="metadata" src="${item.audioUrl}"></audio>
+        </div>
+      `
+      : `
+        <div class="download-item-main">
+          <div class="download-item-title">${item.label}</div>
+          <div class="download-item-meta">未生成。先点击这个情绪按钮生成试听，生成后会保存到这个音色自己的本地文件夹里。</div>
+        </div>
+      `;
+    if (state.auth.isOwner && voice?.id) {
+      const openFolderBtn = document.createElement("button");
+      openFolderBtn.type = "button";
+      openFolderBtn.className = "secondary download-link";
+      openFolderBtn.textContent = "打开文件夹";
+      openFolderBtn.addEventListener("click", () => {
+        openVoicePreviewFolder(voice.id);
+      });
+      row.append(openFolderBtn);
+    }
+    els.voicePreviewFilesBody.append(row);
+  });
+}
+
+function openVoicePreviewFilesModal(voiceId) {
+  state.voicePreviewFilesVoiceId = voiceId;
+  renderVoicePreviewFilesModal();
+  els.voicePreviewFilesModal.classList.remove("hidden");
+  els.voicePreviewFilesModal.setAttribute("aria-hidden", "false");
+  syncBodyModalLock();
+}
+
+async function openVoicePreviewFolder(voiceId) {
+  try {
+    await fetchJson("/indextts-ui/api/open-voice-preview-folder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ voiceId }),
+    });
+  } catch (error) {
+    showToast(error.message, true);
+  }
+}
+
+async function clearVoicePreviewsOnServer(voiceId) {
+  return fetchJson("/indextts-ui/api/clear-voice-previews", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ voiceId }),
+  });
 }
 
 function getSingleLineDownloadInfo(line) {
@@ -501,7 +1178,6 @@ function openAuthModal() {
 
 function closeAuthModal() {
   if (!els.authModal) return;
-  if (state.auth.requireAuth && !state.auth.authenticated) return;
   els.authModal.classList.add("hidden");
   els.authModal.setAttribute("aria-hidden", "true");
   syncBodyModalLock();
@@ -699,33 +1375,75 @@ function createAvatarElement({ seed, fallbackSeed, className, alt }) {
   return avatar;
 }
 
+function buildVoicePreviewFileUrl(audioFile = "") {
+  const normalized = String(audioFile || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalized) return "";
+  return `/indextts-ui/api/file/voice-previews/${normalized.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function normalizeVoicePreviews(previews = {}) {
+  const normalized = {};
+  Object.entries(previews || {}).forEach(([emotionPreset, preview]) => {
+    if (!preview || typeof preview !== "object") return;
+    const audioFile = preview.audioFile || "";
+    const audioUrl = preview.audioUrl || buildVoicePreviewFileUrl(audioFile);
+    normalized[emotionPreset] = {
+      ...preview,
+      audioFile,
+      audioUrl,
+    };
+  });
+  return normalized;
+}
+
+function normalizeVoicePreviewUrl(audioUrl = "") {
+  const value = String(audioUrl || "").trim();
+  if (!value) return "";
+  if (value.startsWith("/") || /^https?:\/\//i.test(value)) return value;
+  return buildVoicePreviewFileUrl(value);
+}
+
 function createVoice(data = {}) {
+  const previews = normalizeVoicePreviews(data.previews || {});
+  const attributes = getVoiceAttributes(data);
   return {
     id: data.id || uid("voice"),
     name: data.name || `基础音色${state.voices.length + 1}`,
     audioFile: data.audioFile || "",
     audioUrl: data.audioUrl || "",
+    audioExists: data.audioExists !== undefined ? Boolean(data.audioExists) : Boolean(data.audioFile),
+    audioMissingReason: data.audioMissingReason || "",
+    audioSize: Number(data.audioSize || 0),
     ownerUsername: data.ownerUsername || "",
     isShared: Boolean(data.isShared),
     isProtected: Boolean(data.isProtected),
     canDelete: data.canDelete !== undefined ? Boolean(data.canDelete) : true,
-    previews: data.previews || {},
+    attributes,
+    previews,
     previewPendingEmotion: data.previewPendingEmotion || "",
     previewBatchPending: Boolean(data.previewBatchPending),
     previewBatchCurrentIndex: data.previewBatchCurrentIndex || 0,
     previewBatchTotal: data.previewBatchTotal || 0,
     previewActiveEmotion: data.previewActiveEmotion || "",
-    previewActiveUrl: data.previewActiveUrl || "",
+    previewActiveUrl: normalizeVoicePreviewUrl(data.previewActiveUrl || ""),
   };
+}
+
+function isVoicePreviewBusy(voice) {
+  return Boolean(voice?.previewPendingEmotion || voice?.previewBatchPending);
 }
 
 function createRole(data = {}) {
   return {
     id: data.id || uid("role"),
-    name: data.name || `角色${state.roles.length + 1}`,
+    name: data.name || "新角色",
+    category: data.category || data.bookCategory || "",
+    ttsEngine: data.ttsEngine || "local",
     voiceId: data.voiceId || "",
     audioFile: data.audioFile || "",
     audioUrl: data.audioUrl || "",
+    azureVoice: data.azureVoice || state.azureTts.defaultVoice || "zh-CN-XiaoxiaoNeural",
+    azureStyle: data.azureStyle || "",
     defaultEmotion: data.defaultEmotion || (state.emotionPresets[0] || "平静"),
   };
 }
@@ -786,6 +1504,56 @@ function createWorkspaceSnapshot() {
     lines: state.lines.map(serializeLine),
     settings: state.settings,
   };
+}
+
+function clampRolesWidth(width) {
+  const layout = document.querySelector(".layout");
+  const layoutWidth = layout?.getBoundingClientRect().width || window.innerWidth;
+  const maxWidth = Math.min(720, Math.max(430, layoutWidth - 520));
+  return Math.round(Math.min(Math.max(Number(width) || 560, 430), maxWidth));
+}
+
+function applyRolesWidth(width) {
+  document.documentElement.style.setProperty("--roles-width", `${clampRolesWidth(width)}px`);
+}
+
+function initLayoutResize() {
+  els.layoutResizeHandle = document.querySelector("#layoutResizeHandle");
+  const savedWidth = Number(localStorage.getItem(LAYOUT_ROLES_WIDTH_STORAGE_KEY) || 560);
+  applyRolesWidth(savedWidth);
+  if (!els.layoutResizeHandle) return;
+
+  let dragging = false;
+  const updateWidth = (clientX) => {
+    const layout = document.querySelector(".layout");
+    if (!layout) return;
+    const rect = layout.getBoundingClientRect();
+    const nextWidth = clampRolesWidth(rect.right - clientX - 10);
+    applyRolesWidth(nextWidth);
+    localStorage.setItem(LAYOUT_ROLES_WIDTH_STORAGE_KEY, String(nextWidth));
+  };
+
+  els.layoutResizeHandle.addEventListener("pointerdown", (event) => {
+    dragging = true;
+    els.layoutResizeHandle.classList.add("is-dragging");
+    els.layoutResizeHandle.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+  });
+  els.layoutResizeHandle.addEventListener("pointermove", (event) => {
+    if (dragging) updateWidth(event.clientX);
+  });
+
+  const stopDragging = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    els.layoutResizeHandle.classList.remove("is-dragging");
+    els.layoutResizeHandle.releasePointerCapture?.(event.pointerId);
+  };
+  els.layoutResizeHandle.addEventListener("pointerup", stopDragging);
+  els.layoutResizeHandle.addEventListener("pointercancel", stopDragging);
+  window.addEventListener("resize", () => {
+    applyRolesWidth(Number(localStorage.getItem(LAYOUT_ROLES_WIDTH_STORAGE_KEY) || 560));
+  });
 }
 
 function readSavedProjects() {
@@ -947,6 +1715,66 @@ function showToast(message, isError = false) {
   els.toast.style.background = isError ? "rgba(185, 47, 47, 0.94)" : "rgba(21, 35, 59, 0.92)";
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => els.toast.classList.add("hidden"), 3200);
+}
+
+let pendingDeleteConfirmResolve = null;
+
+function ensureDeleteConfirmUI() {
+  if (els.deleteConfirmModal) return;
+  const modal = document.createElement("div");
+  modal.id = "deleteConfirmModal";
+  modal.className = "modal hidden";
+  modal.setAttribute("aria-hidden", "true");
+  modal.innerHTML = `
+    <div class="modal-backdrop" data-close-modal="delete-confirm"></div>
+    <div class="modal-panel modal-panel-confirm" role="dialog" aria-modal="true" aria-labelledby="deleteConfirmTitle">
+      <div class="modal-head">
+        <div>
+          <h3 id="deleteConfirmTitle">确认删除</h3>
+          <p id="deleteConfirmMessage">确定删除？</p>
+        </div>
+      </div>
+      <div class="modal-actions">
+        <button id="cancelDeleteConfirmBtn" class="secondary" type="button">取消</button>
+        <button id="confirmDeleteConfirmBtn" class="primary danger-action" type="button">删除</button>
+      </div>
+    </div>
+  `;
+  document.body.append(modal);
+  els.deleteConfirmModal = modal;
+  els.deleteConfirmTitle = modal.querySelector("#deleteConfirmTitle");
+  els.deleteConfirmMessage = modal.querySelector("#deleteConfirmMessage");
+  els.cancelDeleteConfirmBtn = modal.querySelector("#cancelDeleteConfirmBtn");
+  els.confirmDeleteConfirmBtn = modal.querySelector("#confirmDeleteConfirmBtn");
+}
+
+function closeDeleteConfirmModal(result = false) {
+  if (!els.deleteConfirmModal) return;
+  els.deleteConfirmModal.classList.add("hidden");
+  els.deleteConfirmModal.setAttribute("aria-hidden", "true");
+  syncBodyModalLock();
+  if (pendingDeleteConfirmResolve) {
+    const resolve = pendingDeleteConfirmResolve;
+    pendingDeleteConfirmResolve = null;
+    resolve(Boolean(result));
+  }
+}
+
+function confirmDelete(message, options = {}) {
+  ensureDeleteConfirmUI();
+  if (pendingDeleteConfirmResolve) {
+    closeDeleteConfirmModal(false);
+  }
+  els.deleteConfirmTitle.textContent = options.title || "确认删除";
+  els.deleteConfirmMessage.textContent = message || "确定删除？";
+  els.confirmDeleteConfirmBtn.textContent = options.confirmText || "删除";
+  els.deleteConfirmModal.classList.remove("hidden");
+  els.deleteConfirmModal.setAttribute("aria-hidden", "false");
+  syncBodyModalLock();
+  requestAnimationFrame(() => els.confirmDeleteConfirmBtn?.focus());
+  return new Promise((resolve) => {
+    pendingDeleteConfirmResolve = resolve;
+  });
 }
 
 function renderProjectTitle() {
@@ -1190,7 +2018,7 @@ function renderLineCountHint() {
 }
 
 function getVoiceById(voiceId) {
-  return state.voices.find((voice) => voice.id === voiceId) || null;
+  return state.voices.find((voice) => voice.id === voiceId) || getAzureVirtualVoices().find((voice) => voice.id === voiceId) || null;
 }
 
 function getVoiceScopeLabel(voice) {
@@ -1294,11 +2122,18 @@ async function deleteVoiceOnServer(voice) {
 function getResolvedRole(role) {
   if (!role) return null;
   const voice = getVoiceById(role.voiceId);
+  const isAzure = role.ttsEngine === "azure" || voice?.source === "azure";
+  const azureVoice = isAzure
+    ? (role.azureVoice || voice?.azureVoice || voice?.shortName || state.azureTts.defaultVoice || "zh-CN-XiaoxiaoNeural")
+    : "";
   return {
     ...role,
+    ttsEngine: isAzure ? "azure" : "local",
     audioFile: voice?.audioFile || role.audioFile || "",
     audioUrl: voice?.audioUrl || role.audioUrl || "",
-    voiceName: voice?.name || "",
+    azureVoice,
+    azureStyle: normalizeEmotionForRole({ ttsEngine: isAzure ? "azure" : "local", azureVoice }, role.azureStyle || role.defaultEmotion || ""),
+    voiceName: isAzure ? getAzureVoiceLabel(azureVoice) : (voice?.name || ""),
   };
 }
 
@@ -1340,16 +2175,32 @@ function migrateLegacyRoleVoices() {
   });
 }
 
-function assignVoiceToRole(roleId, voiceId) {
+function assignVoiceToRole(roleId, voiceId, emotionPreset = "") {
   const role = getRoleById(roleId);
-  const voice = getVoiceById(voiceId);
+  const voice = getVoiceById(voiceId) || getAzureVirtualVoices().find((item) => item.id === voiceId);
   if (!role || !voice) return;
 
-  role.voiceId = voice.id;
+  if (voice.source === "azure") {
+    role.ttsEngine = "azure";
+    role.azureVoice = voice.azureVoice || voice.shortName || voice.name;
+    role.azureStyle = emotionPreset || "";
+    role.voiceId = voice.id;
+  } else {
+    role.ttsEngine = "local";
+    role.voiceId = voice.id;
+    role.azureVoice = "";
+    role.azureStyle = "";
+  }
+  const selectedEmotion = normalizeEmotionForRole(getResolvedRole(role), emotionPreset || voice.previewActiveEmotion || role.defaultEmotion || "");
+  role.defaultEmotion = selectedEmotion;
   saveState();
   renderRoles();
   renderLines();
-  showToast(`已将“${voice.name}”设置为“${role.name}”的基础音色。`);
+  showToast(voice.source === "azure"
+    ? `已将 Azure 音色“${voice.name}”设置为“${role.name}”。`
+    : selectedEmotion
+    ? `已将“${voice.name} / ${formatEmotionLabel(selectedEmotion)}”设置为“${role.name}”。`
+    : `已将“${voice.name}”设置为“${role.name}”的基础音色。`);
 }
 
 function findRoleByName(name) {
@@ -1452,7 +2303,10 @@ function getLineSignature(line, role) {
   return JSON.stringify({
     emotionPresetVersion: EMOTION_PRESET_SIGNATURE_VERSION,
     roleId: line.roleId || "",
+    ttsEngine: role?.ttsEngine || "local",
     roleAudioFile: role?.audioFile || "",
+    azureVoice: role?.azureVoice || "",
+    azureStyle: role?.azureStyle || "",
     emotionMode: line.emotionMode || "preset",
     emotionPreset: line.emotionMode === "preset" ? (line.emotionPreset || "") : "",
     emotionText: line.emotionMode === "text" ? (line.emotionText || "").trim() : "",
@@ -1904,13 +2758,14 @@ function updateLineVisualState(line, role, node, controls) {
   const lineAudioSettings = normalizeLineAudioSettings(line.audioSettings);
 
   const isPending = Boolean(line.isGenerating || line.pendingTaskKey);
+  const isAudioPlaying = audio && !audio.paused && !audio.ended && Boolean(audio.src);
   const progressPercent = typeof line.pendingProgress === "number"
     ? `${Math.max(0, Math.min(100, line.pendingProgress * 100)).toFixed(1)}%`
     : "0%";
 
   node.classList.toggle("is-generating", isPending);
   node.style.setProperty("--line-progress", progressPercent);
-  generateBtn.classList.remove("busy", "ready", "needs-render");
+  generateBtn.classList.remove("busy", "ready", "needs-render", "playing");
 
   if (line.emotionMode === "text") {
     emotionSelect.classList.add("hidden");
@@ -1977,7 +2832,13 @@ function updateLineVisualState(line, role, node, controls) {
   }
 
   generateBtn.classList.add("ready");
-  generateBtn.title = "播放已生成音频";
+  if (isAudioPlaying) {
+    generateBtn.classList.add("playing");
+    generateBtn.textContent = "■";
+    generateBtn.title = "停止播放";
+  } else {
+    generateBtn.title = "播放已生成音频";
+  }
   status.textContent = "";
   status.classList.add("hidden");
 }
@@ -1988,9 +2849,23 @@ async function playRenderedLine(lineId) {
   if (!audio) return;
   try {
     await audio.play();
+    refreshLineViews([state.lines.find((line) => line.id === lineId)].filter(Boolean));
   } catch (error) {
     console.warn("Audio playback was interrupted", error);
   }
+}
+
+function stopRenderedLine(lineId) {
+  const node = getLineNode(lineId);
+  const audio = node?.querySelector(".line-audio");
+  if (!audio) return;
+  try {
+    audio.pause();
+    audio.currentTime = 0;
+  } catch (_) {
+    // noop
+  }
+  refreshLineViews([state.lines.find((line) => line.id === lineId)].filter(Boolean));
 }
 
 async function generateLineAudio(line, index, { autoplay = false } = {}) {
@@ -1998,8 +2873,11 @@ async function generateLineAudio(line, index, { autoplay = false } = {}) {
   if (!role) {
     throw new Error("请先为这条台词选择角色。");
   }
-  if (!role.audioFile) {
+  if (role.ttsEngine !== "azure" && !role.audioFile) {
     throw new Error(`角色“${role.name}”还没有上传参考音频。`);
+  }
+  if (role.ttsEngine === "azure" && !state.azureTts.configured) {
+    throw new Error("Azure TTS 还没有配置完成。");
   }
   if (!line.text.trim()) {
     throw new Error("台词内容不能为空。");
@@ -2111,21 +2989,52 @@ function ensureVoiceCenterUI() {
   modal.setAttribute("aria-hidden", "true");
   modal.innerHTML = `
     <div class="modal-backdrop" data-close-modal="voice-center"></div>
-    <div class="modal-panel modal-panel-wide" role="dialog" aria-modal="true" aria-labelledby="voiceCenterTitle">
-      <div class="modal-head">
-        <div>
-          <h3 id="voiceCenterTitle">音色中心</h3>
-          <p>统一管理基础音色，角色从这里选择，并支持多情绪试听。建议使用 10 到 15 秒、单人、无底噪、无混响、情绪明确的参考音频。</p>
+    <div class="modal-panel modal-panel-wide voice-center-panel" role="dialog" aria-modal="true" aria-labelledby="voiceCenterTitle">
+      <div class="voice-center-header">
+        <div class="modal-head">
+          <div class="modal-copy">
+            <h3 id="voiceCenterTitle">音色中心</h3>
+            <p>统一管理基础音色，角色从这里选择，并支持多情绪试听。建议使用 10 到 15 秒、单人、无底噪、无混响、情绪明确的参考音频。</p>
+          </div>
+          <button id="closeVoiceCenterModalBtn" class="icon" type="button" title="关闭">×</button>
         </div>
-        <button id="closeVoiceCenterModalBtn" class="icon" type="button" title="关闭">×</button>
-      </div>
-      <div class="voice-center-toolbar">
-        <button id="voiceUploadBtn" class="primary" type="button">上传基础音色</button>
-        <input id="voiceUploadInput" type="file" accept="audio/*" hidden>
-        <label class="inline-field grow">
-          <span>试听文案</span>
-          <input id="voicePreviewText" type="text" placeholder="留空则使用默认试听文案">
-        </label>
+        <div class="voice-center-toolbar">
+          <div class="voice-toolbar-search-row">
+            <button id="voiceUploadBtn" class="primary" type="button">上传基础音色</button>
+            <label class="voice-search-box">
+              <span class="voice-search-icon" aria-hidden="true">⌕</span>
+              <input id="voiceSearchInput" type="search" placeholder="搜索名称或文件名">
+            </label>
+          </div>
+          <input id="voiceUploadInput" type="file" accept="audio/*" hidden>
+          <input id="voiceGenderFilter" type="hidden" value="">
+          <input id="voiceAgeFilter" type="hidden" value="">
+          <input id="voiceLanguageFilter" type="hidden" value="">
+          <input id="voiceSourceFilter" type="hidden" value="">
+          <input id="voiceEmotionModeFilter" type="hidden" value="">
+          <div class="voice-filter-grid">
+            <div class="voice-filter-row">
+              <span class="voice-filter-label">来源</span>
+              <div id="voiceSourceFilterGroup" class="voice-filter-pills">${createFilterPillsHtml("source", VOICE_SOURCE_FILTER_OPTIONS)}</div>
+            </div>
+            <div class="voice-filter-row">
+              <span class="voice-filter-label">多情绪</span>
+              <div id="voiceEmotionModeFilterGroup" class="voice-filter-pills">${createFilterPillsHtml("emotionMode", VOICE_EMOTION_MODE_FILTER_OPTIONS)}</div>
+            </div>
+            <div class="voice-filter-row">
+              <span class="voice-filter-label">性别</span>
+              <div id="voiceGenderFilterGroup" class="voice-filter-pills">${createFilterPillsHtml("gender", VOICE_GENDER_FILTER_OPTIONS)}</div>
+            </div>
+            <div class="voice-filter-row">
+              <span class="voice-filter-label">年龄</span>
+              <div id="voiceAgeFilterGroup" class="voice-filter-pills">${createFilterPillsHtml("ageGroup", VOICE_AGE_FILTER_OPTIONS)}</div>
+            </div>
+            <div class="voice-filter-row">
+              <span class="voice-filter-label">语言</span>
+              <div id="voiceLanguageFilterGroup" class="voice-filter-pills">${createFilterPillsHtml("language", VOICE_LANGUAGE_FILTER_OPTIONS)}</div>
+            </div>
+          </div>
+        </div>
       </div>
       <div id="voiceCenterList" class="voice-center-list"></div>
     </div>
@@ -2136,8 +3045,329 @@ function ensureVoiceCenterUI() {
   els.closeVoiceCenterModalBtn = modal.querySelector("#closeVoiceCenterModalBtn");
   els.voiceUploadInput = modal.querySelector("#voiceUploadInput");
   els.voiceUploadBtn = modal.querySelector("#voiceUploadBtn");
-  els.voicePreviewText = modal.querySelector("#voicePreviewText");
+  els.voicePreviewText = null;
+  els.voiceSearchInput = modal.querySelector("#voiceSearchInput");
+  els.voiceSourceFilter = modal.querySelector("#voiceSourceFilter");
+  els.voiceGenderFilter = modal.querySelector("#voiceGenderFilter");
+  els.voiceAgeFilter = modal.querySelector("#voiceAgeFilter");
+  els.voiceLanguageFilter = modal.querySelector("#voiceLanguageFilter");
+  els.voiceEmotionModeFilter = modal.querySelector("#voiceEmotionModeFilter");
+  els.voiceSourceFilterGroup = modal.querySelector("#voiceSourceFilterGroup");
+  els.voiceGenderFilterGroup = modal.querySelector("#voiceGenderFilterGroup");
+  els.voiceAgeFilterGroup = modal.querySelector("#voiceAgeFilterGroup");
+  els.voiceLanguageFilterGroup = modal.querySelector("#voiceLanguageFilterGroup");
+  els.voiceEmotionModeFilterGroup = modal.querySelector("#voiceEmotionModeFilterGroup");
   els.voiceCenterList = modal.querySelector("#voiceCenterList");
+
+  const previewFilesModal = document.createElement("div");
+  previewFilesModal.id = "voicePreviewFilesModal";
+  previewFilesModal.className = "modal hidden";
+  previewFilesModal.setAttribute("aria-hidden", "true");
+  previewFilesModal.innerHTML = `
+    <div class="modal-backdrop" data-close-modal="voice-preview-files"></div>
+    <div class="modal-panel modal-panel-narrow" role="dialog" aria-modal="true" aria-labelledby="voicePreviewFilesTitle">
+      <div class="modal-head">
+        <div>
+          <h3 id="voicePreviewFilesTitle">试听文件</h3>
+          <p>这里列出这个音色当前已经缓存好的试听文件，后续播放直接复用这些文件。</p>
+        </div>
+        <button id="closeVoicePreviewFilesModalBtn" class="icon" type="button" title="关闭">×</button>
+      </div>
+      <div id="voicePreviewFilesBody" class="download-list"></div>
+    </div>
+  `;
+  document.body.append(previewFilesModal);
+  els.voicePreviewFilesModal = previewFilesModal;
+  els.closeVoicePreviewFilesModalBtn = previewFilesModal.querySelector("#closeVoicePreviewFilesModalBtn");
+  els.voicePreviewFilesTitle = previewFilesModal.querySelector("#voicePreviewFilesTitle");
+  els.voicePreviewFilesBody = previewFilesModal.querySelector("#voicePreviewFilesBody");
+}
+
+function getRoleCategories() {
+  return [...new Set(state.roles.map((role) => (role.category || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+}
+
+function getRoleCategoryTabs() {
+  return [
+    { value: "__all__", label: "全部" },
+    { value: "__uncategorized__", label: "未分类" },
+    ...getRoleCategories().map((category) => ({ value: category, label: category })),
+  ];
+}
+
+function roleMatchesCategory(role, categoryValue) {
+  if (!categoryValue || categoryValue === "__all__") return true;
+  const category = (role.category || "").trim();
+  if (categoryValue === "__uncategorized__") return !category;
+  return category === categoryValue;
+}
+
+function renderCategoryTabs(container, activeValue, onSelect) {
+  if (!container) return;
+  container.innerHTML = "";
+  getRoleCategoryTabs().forEach((tab) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `role-category-tab${tab.value === activeValue ? " active" : ""}`;
+    button.textContent = tab.label;
+    button.addEventListener("click", () => onSelect(tab.value));
+    container.append(button);
+  });
+}
+
+function ensureRoleCategoryTabsUI() {
+  if (els.roleCategoryTabs || !els.roleList) return;
+  const tabs = document.createElement("div");
+  tabs.id = "roleCategoryTabs";
+  tabs.className = "role-category-tabs";
+  els.roleList.insertAdjacentElement("beforebegin", tabs);
+  els.roleCategoryTabs = tabs;
+}
+
+function ensureRoleManagerUI() {
+  if (els.roleManagerModal) return;
+
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "secondary panel-action-btn panel-action-btn-role-manager";
+  trigger.innerHTML = `
+    <span class="panel-action-icon" aria-hidden="true">▣</span>
+    <span class="panel-action-label">书单管理</span>
+  `;
+  els.addRoleBtn.insertAdjacentElement("beforebegin", trigger);
+  els.roleManagerBtn = trigger;
+
+  const modal = document.createElement("div");
+  modal.id = "roleManagerModal";
+  modal.className = "modal hidden";
+  modal.setAttribute("aria-hidden", "true");
+  modal.innerHTML = `
+    <div class="modal-backdrop" data-close-modal="role-manager"></div>
+    <div class="modal-panel modal-panel-wide role-manager-panel" role="dialog" aria-modal="true" aria-labelledby="roleManagerTitle">
+      <div class="modal-head">
+        <div>
+          <h3 id="roleManagerTitle">书单管理</h3>
+          <p>按书单分类管理角色，并支持导出/导入本地角色列表。</p>
+        </div>
+        <button id="closeRoleManagerModalBtn" class="icon" type="button" title="关闭">×</button>
+      </div>
+      <div id="roleManagerTabs" class="role-category-tabs role-manager-tabs"></div>
+      <div class="role-manager-toolbar">
+        <button id="roleManagerSelectAll" class="secondary" type="button">全选当前</button>
+        <label class="role-manager-new-category">
+          <span>新建/指定书单</span>
+          <input id="roleManagerNewCategoryInput" type="text" placeholder="例如：某某书">
+        </label>
+        <button id="roleManagerAssignBtn" class="secondary" type="button">加入书单</button>
+        <div class="role-manager-actions">
+          <button id="exportRolesBtn" class="secondary" type="button">导出全部</button>
+          <button id="exportRoleCategoryBtn" class="secondary" type="button">导出当前分类</button>
+          <button id="importRolesBtn" class="primary" type="button">导入角色列表</button>
+          <input id="importRolesInput" type="file" accept="application/json,.json" hidden>
+        </div>
+      </div>
+      <div id="roleManagerList" class="role-manager-list"></div>
+      <div class="modal-actions">
+        <button id="saveRoleManagerBtn" class="primary" type="button">保存分类</button>
+      </div>
+    </div>
+  `;
+  document.body.append(modal);
+  els.roleManagerModal = modal;
+  els.closeRoleManagerModalBtn = modal.querySelector("#closeRoleManagerModalBtn");
+  els.roleManagerCategoryFilter = modal.querySelector("#roleManagerCategoryFilter");
+  els.roleManagerTabs = modal.querySelector("#roleManagerTabs");
+  els.roleManagerSelectAll = modal.querySelector("#roleManagerSelectAll");
+  els.roleManagerNewCategoryInput = modal.querySelector("#roleManagerNewCategoryInput");
+  els.roleManagerAssignBtn = modal.querySelector("#roleManagerAssignBtn");
+  els.roleManagerList = modal.querySelector("#roleManagerList");
+  els.saveRoleManagerBtn = modal.querySelector("#saveRoleManagerBtn");
+  els.exportRolesBtn = modal.querySelector("#exportRolesBtn");
+  els.exportRoleCategoryBtn = modal.querySelector("#exportRoleCategoryBtn");
+  els.importRolesBtn = modal.querySelector("#importRolesBtn");
+  els.importRolesInput = modal.querySelector("#importRolesInput");
+}
+
+function openRoleManagerModal() {
+  ensureRoleManagerUI();
+  renderRoleManagerModal();
+  els.roleManagerModal.classList.remove("hidden");
+  els.roleManagerModal.setAttribute("aria-hidden", "false");
+  syncBodyModalLock();
+}
+
+function closeRoleManagerModal() {
+  if (!els.roleManagerModal) return;
+  els.roleManagerModal.classList.add("hidden");
+  els.roleManagerModal.setAttribute("aria-hidden", "true");
+  syncBodyModalLock();
+}
+
+function renderRoleManagerModal() {
+  if (!els.roleManagerList) return;
+  renderCategoryTabs(els.roleManagerTabs, state.roleManagerCategoryFilter, (value) => {
+    state.roleManagerCategoryFilter = value;
+    if (els.roleManagerNewCategoryInput && value !== "__all__" && value !== "__uncategorized__") {
+      els.roleManagerNewCategoryInput.value = value;
+    }
+    renderRoleManagerModal();
+  });
+  const filter = state.roleManagerCategoryFilter || "__all__";
+  const roles = state.roles.filter((role) => roleMatchesCategory(role, filter));
+  els.roleManagerList.innerHTML = "";
+  if (!roles.length) {
+    const empty = document.createElement("div");
+    empty.className = "voice-empty";
+    empty.textContent = filter === "__all__" ? "还没有角色。" : "当前书单还没有角色。";
+    els.roleManagerList.append(empty);
+    return;
+  }
+  roles.forEach((role) => {
+    const row = document.createElement("div");
+    row.className = "role-manager-row";
+    row.dataset.roleId = role.id;
+    row.innerHTML = `
+      <label class="role-manager-check">
+        <input type="checkbox" data-role-select value="${escapeHtml(role.id)}">
+      </label>
+      <div class="role-manager-name">
+        <strong>${escapeHtml(role.name || "未命名角色")}</strong>
+        <span>${escapeHtml(getResolvedRole(role)?.voiceName || "未选择音色")}</span>
+      </div>
+      <label class="role-manager-category">
+        <span>书单</span>
+        <input type="text" value="${escapeHtml(role.category || "")}" placeholder="例如：第51章 / 某书名">
+      </label>
+    `;
+    els.roleManagerList.append(row);
+  });
+}
+
+function getSelectedManagedRoleIds() {
+  return [...(els.roleManagerList?.querySelectorAll("[data-role-select]:checked") || [])]
+    .map((input) => input.value)
+    .filter(Boolean);
+}
+
+function assignSelectedRolesToCategory() {
+  const category = (els.roleManagerNewCategoryInput?.value || "").trim();
+  if (!category) {
+    showToast("先输入或选择一个书单名称。", true);
+    return;
+  }
+  const selectedIds = getSelectedManagedRoleIds();
+  if (!selectedIds.length) {
+    showToast("先勾选要加入书单的角色。", true);
+    return;
+  }
+  state.roles.forEach((role) => {
+    if (selectedIds.includes(role.id)) {
+      role.category = category;
+    }
+  });
+  state.roleManagerCategoryFilter = category;
+  state.roleCategoryFilter = category;
+  saveState();
+  renderRoles();
+  renderRoleManagerModal();
+  showToast(`已将 ${selectedIds.length} 个角色加入“${category}”。`);
+}
+
+function toggleRoleManagerSelectAll() {
+  const boxes = [...(els.roleManagerList?.querySelectorAll("[data-role-select]") || [])];
+  if (!boxes.length) return;
+  const shouldCheck = boxes.some((box) => !box.checked);
+  boxes.forEach((box) => {
+    box.checked = shouldCheck;
+  });
+}
+
+function saveRoleManagerCategories() {
+  els.roleManagerList?.querySelectorAll(".role-manager-row").forEach((row) => {
+    const role = getRoleById(row.dataset.roleId || "");
+    const input = row.querySelector(".role-manager-category input");
+    if (role && input instanceof HTMLInputElement) {
+      role.category = input.value.trim();
+    }
+  });
+  saveState();
+  renderRoles();
+  renderRoleManagerModal();
+  showToast("角色分类已保存。");
+}
+
+function serializeRolesForExport(roles) {
+  return roles.map((role) => ({
+    id: role.id,
+    name: role.name,
+    category: role.category || "",
+    ttsEngine: role.ttsEngine || "local",
+    voiceId: role.voiceId || "",
+    azureVoice: role.azureVoice || "",
+    azureStyle: role.azureStyle || "",
+    defaultEmotion: role.defaultEmotion || "",
+  }));
+}
+
+function exportRoles(category = "") {
+  const roles = category ? state.roles.filter((role) => roleMatchesCategory(role, category)) : state.roles;
+  const payload = {
+    type: "indextts-role-list",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    category,
+    roles: serializeRolesForExport(roles),
+  };
+  const suffix = category ? `-${category}` : "";
+  downloadJson(payload, `角色列表${suffix}.json`);
+}
+
+function downloadJson(payload, filename) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename.replace(/[\\/:*?"<>|]/g, "_");
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function importRolesFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const payload = JSON.parse(String(reader.result || ""));
+      const rawRoles = Array.isArray(payload) ? payload : payload.roles;
+      if (!Array.isArray(rawRoles)) throw new Error("文件中没有角色列表。");
+      let added = 0;
+      let updated = 0;
+      rawRoles.forEach((raw) => {
+        if (!raw || typeof raw !== "object") return;
+        const existingIndex = state.roles.findIndex((role) => role.id === raw.id || ((role.name || "").trim() && (role.name || "").trim() === String(raw.name || "").trim()));
+        const existing = existingIndex >= 0 ? state.roles[existingIndex] : null;
+        const next = createRole({ ...(existing || {}), ...raw, id: existing?.id || raw.id || uid("role") });
+        if (existingIndex >= 0) {
+          state.roles[existingIndex] = next;
+          updated += 1;
+        } else {
+          state.roles.push(next);
+          added += 1;
+        }
+      });
+      saveState();
+      renderAll();
+      renderRoleManagerModal();
+      showToast(`角色导入完成：新增 ${added} 个，更新 ${updated} 个。`);
+    } catch (error) {
+      showToast(`角色导入失败：${error.message}`, true);
+    } finally {
+      if (els.importRolesInput) els.importRolesInput.value = "";
+    }
+  };
+  reader.readAsText(file, "utf-8");
 }
 
 async function uploadVoiceFile(file) {
@@ -2168,18 +3398,31 @@ function getVoicePreviewSignature(voice, emotionPreset) {
 }
 
 async function previewVoiceEmotion(voiceId, emotionPreset, options = {}) {
-  const { autoplay = true } = options;
+  const { autoplay = true, forceRegenerate = false, allowPending = false } = options;
   const voice = getVoiceById(voiceId);
   if (!voice || !voice.audioFile) {
     showToast("这个音色还没有参考音频。", true);
-    return;
+    return false;
+  }
+  if (voice.audioExists === false) {
+    showToast(voice.audioMissingReason || "这个音色的参考音频不存在或为空，请重新上传。", true);
+    return false;
+  }
+  if (!allowPending && voice.previewPendingEmotion === emotionPreset) {
+    showToast(`${formatEmotionLabel(emotionPreset)}试听正在生成。`);
+    return false;
+  }
+  if (autoplay && isVoicePreviewPlaying(voice.id, emotionPreset) && !forceRegenerate) {
+    stopVoicePreviewPlayback(voice.id);
+    if (!updateVoiceCenterCard(voice.id)) renderVoiceCenter();
+    return true;
   }
 
   stopVoicePreviewPlayback(voiceId);
 
   const currentSignature = getVoicePreviewSignature(voice, emotionPreset);
-  const cached = voice.previews?.[emotionPreset];
-  if (cached?.audioUrl && cached.previewSignature === currentSignature) {
+  const cached = getCachedVoicePreview(voice, emotionPreset);
+  if (!forceRegenerate && cached?.audioUrl) {
     voice.previewActiveEmotion = emotionPreset;
     voice.previewActiveUrl = cached.audioUrl;
     saveState();
@@ -2188,13 +3431,18 @@ async function previewVoiceEmotion(voiceId, emotionPreset, options = {}) {
     }
     const player = els.voiceCenterList.querySelector(`[data-voice-player="${voice.id}"]`);
     if (player && autoplay) {
-      loadAndPlayVoicePreview(player, cached.audioUrl);
+      loadAndPlayVoicePreview(player, cached.audioUrl, voice.id, emotionPreset);
     }
-    return;
+    return true;
+  }
+
+  if (forceRegenerate && voice.previews?.[emotionPreset]) {
+    delete voice.previews[emotionPreset];
   }
 
   voice.previewActiveEmotion = emotionPreset;
   voice.previewPendingEmotion = emotionPreset;
+  focusVoicePreviewChip(voice.id, emotionPreset);
   if (!updateVoiceCenterCard(voice.id)) {
     renderVoiceCenter();
   }
@@ -2209,6 +3457,7 @@ async function previewVoiceEmotion(voiceId, emotionPreset, options = {}) {
         emotionPreset,
         previewText: getVoicePreviewPrompt(voice, emotionPreset),
         previewSignature: currentSignature,
+        forceRegenerate,
         settings: state.settings,
       }),
     });
@@ -2227,10 +3476,14 @@ async function previewVoiceEmotion(voiceId, emotionPreset, options = {}) {
     }
     const player = els.voiceCenterList.querySelector(`[data-voice-player="${voice.id}"]`);
     if (player && autoplay) {
-      loadAndPlayVoicePreview(player, result.audioUrl);
+      loadAndPlayVoicePreview(player, result.audioUrl, voice.id, emotionPreset);
     }
+    return true;
   } catch (error) {
+    voice.previewActiveEmotion = emotionPreset;
+    voice.previewActiveUrl = "";
     showToast(error.message, true);
+    return false;
   } finally {
     voice.previewPendingEmotion = "";
     saveState();
@@ -2240,10 +3493,79 @@ async function previewVoiceEmotion(voiceId, emotionPreset, options = {}) {
   }
 }
 
+function buildVoiceEmotionChips(voice) {
+  const chips = document.createElement("div");
+  chips.className = "voice-emotion-chips";
+  const audioUnavailable = voice.audioExists === false;
+
+  state.emotionPresets.forEach((preset) => {
+    const preview = getCachedVoicePreview(voice, preset);
+    const hasPreviewFile = Boolean(preview?.audioUrl);
+    const chipWrap = document.createElement("div");
+    chipWrap.className = "voice-emotion-chip-wrap";
+
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "voice-emotion-chip";
+    chip.dataset.previewVoice = voice.id;
+    chip.dataset.previewEmotion = preset;
+    chip.textContent = formatEmotionLabel(preset);
+    if (voice.previewActiveEmotion === preset) {
+      chip.classList.add("active");
+    }
+    if (voice.previewPendingEmotion === preset) {
+      chip.classList.add("loading");
+    }
+    if (isVoicePreviewPlaying(voice.id, preset)) {
+      chip.classList.add("playing");
+    }
+    if (audioUnavailable) {
+      chip.classList.add("unavailable");
+      chip.disabled = true;
+      chip.title = voice.audioMissingReason || "参考音频不可用，请重新上传这个基础音色";
+    } else if (!hasPreviewFile) {
+      chip.classList.add("missing");
+      chip.title = "还没有本地试听文件，点击生成";
+    } else {
+      chip.title = "直接播放本地试听文件";
+    }
+    if (voice.previewPendingEmotion === preset || voice.previewBatchPending) {
+      chip.disabled = voice.previewBatchPending && voice.previewPendingEmotion !== preset;
+      chip.textContent = voice.previewPendingEmotion === preset ? `${formatEmotionLabel(preset)}...` : formatEmotionLabel(preset);
+    }
+    chip.addEventListener("click", () => {
+      previewVoiceEmotion(voice.id, preset);
+    });
+    chipWrap.append(chip);
+
+    if (!audioUnavailable && !hasPreviewFile && !voice.previewBatchPending && voice.previewPendingEmotion !== preset) {
+      const refreshBtn = document.createElement("button");
+      refreshBtn.type = "button";
+      refreshBtn.className = "voice-emotion-refresh";
+      refreshBtn.title = `重新生成${preset}试听`;
+      refreshBtn.textContent = "↻";
+      refreshBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        previewVoiceEmotion(voice.id, preset, { forceRegenerate: true });
+      });
+      chipWrap.append(refreshBtn);
+    }
+
+    chips.append(chipWrap);
+  });
+
+  return chips;
+}
+
 async function previewAllVoiceEmotions(voiceId) {
   const voice = getVoiceById(voiceId);
   if (!voice || !voice.audioFile) {
     showToast("这个音色还没有参考音频。", true);
+    return;
+  }
+  if (voice.audioExists === false) {
+    showToast(voice.audioMissingReason || "这个音色的参考音频不存在或为空，请重新上传。", true);
     return;
   }
   if (voice.previewBatchPending) {
@@ -2252,6 +3574,9 @@ async function previewAllVoiceEmotions(voiceId) {
   }
 
   stopVoicePreviewPlayback(voiceId);
+  voice.previews = {};
+  voice.previewActiveEmotion = "";
+  voice.previewActiveUrl = "";
   voice.previewBatchPending = true;
   voice.previewBatchCurrentIndex = 0;
   voice.previewBatchTotal = state.emotionPresets.length;
@@ -2262,6 +3587,23 @@ async function previewAllVoiceEmotions(voiceId) {
   }
 
   try {
+    const clearResult = await clearVoicePreviewsOnServer(voiceId);
+    if (clearResult?.voice) {
+      const freshVoice = createVoice({
+        ...clearResult.voice,
+        previewBatchPending: true,
+        previewBatchCurrentIndex: 0,
+        previewBatchTotal: state.emotionPresets.length,
+        previewPendingEmotion: "",
+      });
+      Object.assign(voice, freshVoice);
+      saveState();
+      if (!updateVoiceCenterCard(voice.id)) {
+        renderVoiceCenter();
+      }
+    }
+
+    const failedPresets = [];
     for (const [index, preset] of state.emotionPresets.entries()) {
       voice.previewBatchCurrentIndex = index + 1;
       voice.previewPendingEmotion = preset;
@@ -2269,9 +3611,16 @@ async function previewAllVoiceEmotions(voiceId) {
       if (!updateVoiceCenterCard(voice.id)) {
         renderVoiceCenter();
       }
-      await previewVoiceEmotion(voiceId, preset, { autoplay: false });
+      const ok = await previewVoiceEmotion(voiceId, preset, { autoplay: false, forceRegenerate: true, allowPending: true });
+      if (!ok) {
+        failedPresets.push(preset);
+      }
     }
-    showToast(`“${voice.name}”的全部情绪试听已准备完成。`);
+    if (failedPresets.length) {
+      showToast(`“${voice.name}”有 ${failedPresets.length} 个情绪试听生成失败，可单击对应情绪重试。`, true);
+    } else {
+      showToast(`“${voice.name}”的全部情绪试听已准备完成。`);
+    }
   } finally {
     voice.previewBatchPending = false;
     voice.previewBatchCurrentIndex = 0;
@@ -2304,19 +3653,31 @@ function renderVoiceCenter() {
       : "统一管理基础音色，角色从这里选择，并支持多情绪试听。";
   }
 
-  if (!state.voices.length) {
+  const allVoiceItems = getVoiceCenterItems();
+  const visibleVoices = allVoiceItems.filter(voiceMatchesFilters);
+
+  if (!allVoiceItems.length) {
     const empty = document.createElement("div");
     empty.className = "voice-empty";
     empty.textContent = pickerRole
-      ? "还没有基础音色，先上传一条参考音频，再给这个角色选择。"
-      : "还没有基础音色，先上传一条参考音频。";
+      ? "还没有可选音色，先上传本地音色或配置 Azure TTS。"
+      : "还没有可选音色，先上传本地音色或配置 Azure TTS。";
     els.voiceCenterList.append(empty);
     return;
   }
 
-  state.voices.forEach((voice) => {
+  if (!visibleVoices.length) {
+    const empty = document.createElement("div");
+    empty.className = "voice-empty";
+    empty.textContent = "没有符合当前筛选条件的音色。";
+    els.voiceCenterList.append(empty);
+    return;
+  }
+
+  visibleVoices.forEach((voice) => {
+    const isAzureVoice = voice.source === "azure";
     const card = document.createElement("article");
-    card.className = "voice-card";
+    card.className = `voice-card${isAzureVoice ? " voice-card-azure" : ""}`;
 
     const head = document.createElement("div");
     head.className = "voice-card-head";
@@ -2327,76 +3688,142 @@ function renderVoiceCenter() {
       className: "avatar voice-avatar",
       alt: `${voice.name || "基础音色"}头像`,
     });
-    avatar.title = "点击依次生成全部情绪试听";
-    avatar.tabIndex = 0;
-    avatar.role = "button";
-    avatar.addEventListener("click", () => {
-      previewAllVoiceEmotions(voice.id);
-    });
-    avatar.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
+    if (!isAzureVoice) {
+      avatar.title = "点击依次生成全部情绪试听";
+      avatar.tabIndex = 0;
+      avatar.role = "button";
+      avatar.addEventListener("click", () => {
         previewAllVoiceEmotions(voice.id);
-      }
-    });
+      });
+      avatar.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          previewAllVoiceEmotions(voice.id);
+        }
+      });
+    }
 
-    const nameInput = document.createElement("input");
-    nameInput.className = "voice-name-input";
-    nameInput.type = "text";
-    nameInput.value = voice.name;
-    nameInput.placeholder = "基础音色名称";
-    nameInput.addEventListener("input", (event) => {
-      voice.name = event.target.value;
-    });
-    nameInput.addEventListener("change", async (event) => {
-      const target = event.target;
-      if (!(target instanceof HTMLInputElement)) return;
-      const previousName = voice.name;
-      try {
-        target.disabled = true;
-        const savedName = await renameVoiceOnServer(voice, target.value);
-        target.value = savedName;
-      } catch (error) {
-        voice.name = previousName;
-        target.value = previousName;
-        showToast(error.message, true);
-      } finally {
-        target.disabled = false;
-      }
-    });
+    let nameNode;
+    if (state.auth.isOwner) {
+      const nameInput = document.createElement("input");
+      nameInput.className = "voice-name-input";
+      nameInput.type = "text";
+      nameInput.value = voice.name;
+      nameInput.placeholder = "基础音色名称";
+      nameInput.disabled = isVoicePreviewBusy(voice);
+      nameInput.title = isVoicePreviewBusy(voice) ? "试听生成或清理期间不能修改音色名称" : "";
+      nameInput.addEventListener("input", (event) => {
+        if (isVoicePreviewBusy(voice)) return;
+        voice.name = event.target.value;
+      });
+      nameInput.addEventListener("change", async (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement)) return;
+        if (isVoicePreviewBusy(voice)) {
+          target.value = voice.name;
+          showToast("试听生成或清理期间不能修改音色名称。", true);
+          return;
+        }
+        const previousName = voice.name;
+        try {
+          target.disabled = true;
+          const savedName = isAzureVoice
+            ? await renameAzureVoice(voice, target.value)
+            : await renameVoiceOnServer(voice, target.value);
+          target.value = savedName;
+        } catch (error) {
+          voice.name = previousName;
+          target.value = previousName;
+          showToast(error.message, true);
+        } finally {
+          target.disabled = isVoicePreviewBusy(voice);
+        }
+      });
+      nameNode = nameInput;
+    } else {
+      nameNode = document.createElement("div");
+      nameNode.className = "voice-name-display";
+      nameNode.textContent = voice.name || "基础音色";
+    }
 
-    const removeBtn = document.createElement("button");
-    removeBtn.type = "button";
-    removeBtn.className = "icon danger";
-    removeBtn.textContent = "×";
-    removeBtn.title = voice.canDelete ? "删除音色" : "这个共享音色由本机管理员维护，不能删除";
-    removeBtn.disabled = !voice.canDelete;
-    removeBtn.addEventListener("click", async () => {
-      if (!voice.canDelete) {
-        showToast("这个共享音色由本机管理员维护，不能删除。", true);
-        return;
-      }
-      try {
-        removeBtn.disabled = true;
-        await deleteVoiceOnServer(voice);
-      } catch (error) {
-        removeBtn.disabled = false;
-        showToast(error.message, true);
-      }
-    });
+    head.append(avatar, nameNode);
 
-    head.append(avatar, nameInput, removeBtn);
+    if (voice.canDelete && !isAzureVoice) {
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "icon danger";
+      removeBtn.textContent = "×";
+      removeBtn.title = "删除音色";
+      removeBtn.addEventListener("click", async () => {
+        if (!(await confirmDelete(`确定删除音色“${voice.name || "基础音色"}”？`))) return;
+        try {
+          removeBtn.disabled = true;
+          await deleteVoiceOnServer(voice);
+        } catch (error) {
+          removeBtn.disabled = false;
+          showToast(error.message, true);
+        }
+      });
+      head.append(removeBtn);
+    }
 
   const meta = document.createElement("div");
   meta.className = "voice-card-meta";
-  meta.textContent = voice.audioFile || "未上传参考音频";
+  if (voice.audioExists === false) {
+    meta.classList.add("missing");
+    meta.textContent = voice.audioMissingReason || "参考音频不存在或为空，请重新上传";
+  } else {
+    meta.classList.add("hidden");
+    meta.textContent = "";
+  }
 
   const badgeRow = document.createElement("div");
   badgeRow.className = "voice-card-badges";
+  const sourceBadge = document.createElement("span");
+  sourceBadge.className = `voice-badge ${isAzureVoice ? "azure" : "owned"}`;
+  sourceBadge.textContent = getVoiceSourceLabel(voice);
+  badgeRow.append(sourceBadge);
   const scopeBadge = document.createElement("span");
   scopeBadge.className = `voice-badge ${voice.isShared ? "shared" : "owned"}`;
   scopeBadge.textContent = getVoiceScopeLabel(voice);
-  badgeRow.append(scopeBadge);
+  if (!isAzureVoice) {
+    badgeRow.append(scopeBadge);
+  }
+  const attrLabel = getVoiceAttributeLabel(voice);
+  if (attrLabel) {
+    const attrBadge = document.createElement("span");
+    attrBadge.className = "voice-badge attributes";
+    attrBadge.textContent = attrLabel;
+    badgeRow.append(attrBadge);
+  }
+  const anyPreview = isAzureVoice
+    ? (getAzureCachedPreview(voice, voice.azureMeta?.previewStyle || "") || (voice.azureMeta?.previewAudioUrl ? { audioUrl: voice.azureMeta.previewAudioUrl } : null))
+    : getAnyVoicePreview(voice);
+  const openFilesBtn = document.createElement("button");
+  openFilesBtn.type = "button";
+  openFilesBtn.className = `voice-preview-file-btn${anyPreview?.audioUrl ? "" : " placeholder"}`;
+  openFilesBtn.textContent = "文件";
+  openFilesBtn.title = anyPreview?.audioUrl ? "查看这个音色已缓存的试听文件" : "还没有缓存试听文件";
+  openFilesBtn.disabled = !anyPreview?.audioUrl;
+  openFilesBtn.addEventListener("click", () => {
+    if (!anyPreview?.audioUrl) return;
+    openVoicePreviewFilesModal(voice.id);
+  });
+  if (!isAzureVoice) {
+    badgeRow.append(openFilesBtn);
+  }
+  if (state.auth.isOwner) {
+    const attrBtn = document.createElement("button");
+    attrBtn.type = "button";
+    attrBtn.className = "voice-preview-file-btn voice-attributes-btn";
+    attrBtn.textContent = "✎";
+    attrBtn.setAttribute("aria-label", "编辑音色属性");
+    attrBtn.title = "设置性别、年龄阶段和语言";
+    attrBtn.addEventListener("click", () => {
+      openVoiceAttributesModal(voice.id);
+    });
+    badgeRow.append(attrBtn);
+  }
 
   const player = document.createElement("audio");
     player.dataset.voicePlayer = voice.id;
@@ -2404,25 +3831,54 @@ function renderVoiceCenter() {
 
     const previewStatus = document.createElement("div");
     previewStatus.className = "voice-preview-status";
+    const cachedPreview = getCachedVoicePreview(voice);
 
-    if (voice.previewBatchPending && voice.previewPendingEmotion) {
+    if (isAzureVoice) {
+      const style = voice.previewActiveEmotion || voice.azureMeta?.previewStyle || "";
+      const cachedAzurePreview = getAzureCachedPreview(voice, style);
+      const previewUrl = cachedAzurePreview?.audioUrl
+        || (style === (voice.azureMeta?.previewStyle || "") ? voice.azureMeta?.previewAudioUrl : "")
+        || voice.previewActiveUrl
+        || "";
+      player.controls = false;
+      player.classList.add("hidden");
+      if (previewUrl) {
+        player.src = previewUrl;
+        player.load();
+      }
+      previewStatus.textContent = voice.previewPendingEmotion
+        ? `正在下载 Azure ${style ? formatAzureStyleLabel(style) : "默认"}试听...`
+        : "";
+    } else if (voice.audioExists === false) {
+      player.controls = false;
+      player.classList.add("hidden");
+      previewStatus.classList.add("error");
+      previewStatus.textContent = voice.audioMissingReason || "参考音频不存在或为空，请重新上传这个基础音色。";
+    } else if (voice.previewBatchPending && voice.previewPendingEmotion) {
       player.controls = false;
       player.classList.add("hidden");
       previewStatus.classList.add("loading");
       previewStatus.textContent = `正在批量生成试听 ${voice.previewBatchCurrentIndex}/${voice.previewBatchTotal}：${formatEmotionLabel(voice.previewPendingEmotion)}...`;
+    } else if (voice.previewBatchPending) {
+      player.controls = false;
+      player.classList.add("hidden");
+      previewStatus.classList.add("loading");
+      previewStatus.textContent = "正在删除旧试听文件...";
     } else if (voice.previewPendingEmotion) {
       player.controls = false;
       player.classList.add("hidden");
       previewStatus.classList.add("loading");
       previewStatus.textContent = `正在加载${formatEmotionLabel(voice.previewPendingEmotion)}试听...`;
     } else {
-      player.controls = true;
-      previewStatus.textContent = voice.previewActiveEmotion
+      player.controls = false;
+      player.classList.add("hidden");
+      previewStatus.textContent = voice.previewActiveEmotion && cachedPreview?.audioUrl
         ? `已缓存${formatEmotionLabel(voice.previewActiveEmotion)}试听，下次可直接播放。`
-        : "选择一个情绪后会生成试听，并自动缓存到本地。";
+        : voice.previewActiveEmotion
+        ? `${formatEmotionLabel(voice.previewActiveEmotion)}试听文件不存在，点击情绪按钮重新生成。`
+        : "";
     }
 
-    const cachedPreview = getCachedVoicePreview(voice);
     const playerSource = !voice.previewPendingEmotion
       ? (cachedPreview?.audioUrl || voice.previewActiveUrl || "")
       : "";
@@ -2430,6 +3886,9 @@ function renderVoiceCenter() {
     if (playerSource) {
       player.src = playerSource;
       player.load();
+    } else if (!voice.previewPendingEmotion && voice.audioExists !== false) {
+      player.controls = false;
+      player.classList.add("hidden");
     }
 
     player.addEventListener("error", async () => {
@@ -2439,50 +3898,70 @@ function renderVoiceCenter() {
       voice.previewActiveUrl = "";
       delete voice.previews?.[cached.emotionPreset];
       saveState();
-      renderVoiceCenter();
-      try {
-        await previewVoiceEmotion(voice.id, cached.emotionPreset, { autoplay: false });
-      } catch (_) {
-        // previewVoiceEmotion already surfaces the error.
+      voice.previewActiveEmotion = cached.emotionPreset;
+      saveState();
+      if (!updateVoiceCenterCard(voice.id)) {
+        renderVoiceCenter();
       }
     });
 
-    const chips = document.createElement("div");
-    chips.className = "voice-emotion-chips";
-
-    state.emotionPresets.forEach((preset) => {
-      const chip = document.createElement("button");
-      chip.type = "button";
-      chip.className = "voice-emotion-chip";
-      chip.textContent = formatEmotionLabel(preset);
-      if (voice.previewActiveEmotion === preset) {
-        chip.classList.add("active");
-      }
-      if (voice.previewPendingEmotion === preset || voice.previewBatchPending) {
-        chip.disabled = true;
-        chip.textContent = voice.previewPendingEmotion === preset ? `${formatEmotionLabel(preset)}...` : formatEmotionLabel(preset);
-      }
-      chip.addEventListener("click", () => {
-        previewVoiceEmotion(voice.id, preset);
+    const chips = isAzureVoice ? document.createElement("div") : buildVoiceEmotionChips(voice);
+    if (isAzureVoice) {
+      chips.className = "voice-emotion-chips";
+      const defaultChip = document.createElement("button");
+      defaultChip.type = "button";
+      defaultChip.className = `voice-emotion-chip${!voice.previewActiveEmotion ? " active" : ""}`;
+      defaultChip.dataset.previewVoice = voice.id;
+      defaultChip.dataset.previewEmotion = "";
+      if (voice.previewPendingEmotion === "Azure") defaultChip.classList.add("loading");
+      if (isVoicePreviewPlaying(voice.id, "")) defaultChip.classList.add("playing");
+      defaultChip.textContent = "默认";
+      defaultChip.addEventListener("click", () => {
+        previewAzureVoice(voice.id, { autoplay: true, style: "" });
       });
-      chips.append(chip);
-    });
+      chips.append(defaultChip);
+      (voice.azureMeta?.styles || []).forEach((style) => {
+        const chip = document.createElement("button");
+        chip.type = "button";
+        chip.className = `voice-emotion-chip${voice.previewActiveEmotion === style ? " active" : ""}`;
+        chip.dataset.previewVoice = voice.id;
+        chip.dataset.previewEmotion = style;
+        if (voice.previewPendingEmotion === style) chip.classList.add("loading");
+        if (isVoicePreviewPlaying(voice.id, style)) chip.classList.add("playing");
+        chip.textContent = formatAzureStyleLabel(style);
+        chip.title = formatAzureStyleLabel(style);
+        chip.addEventListener("click", () => {
+          previewAzureVoice(voice.id, { autoplay: true, style });
+        });
+        chips.append(chip);
+      });
+    }
 
     const actions = document.createElement("div");
     actions.className = "voice-card-actions";
 
-    if (pickerRole) {
-      const selectBtn = document.createElement("button");
-      selectBtn.type = "button";
-      selectBtn.className = "primary";
-      selectBtn.textContent = pickerRole.voiceId === voice.id ? `已用于 ${pickerRoleName}` : `选给 ${pickerRoleName}`;
-      selectBtn.disabled = pickerRole.voiceId === voice.id;
-      selectBtn.addEventListener("click", () => {
-        assignVoiceToRole(pickerRole.id, voice.id);
-        closeVoiceCenterModal();
-      });
-      actions.append(selectBtn);
+  if (pickerRole) {
+    const selectBtn = document.createElement("button");
+    selectBtn.type = "button";
+    selectBtn.className = "primary";
+    const selectedEmotion = voice.previewActiveEmotion || "";
+    const sameVoice = isAzureVoice
+      ? pickerRole.ttsEngine === "azure" && pickerRole.azureVoice === (voice.azureVoice || voice.shortName)
+      : pickerRole.voiceId === voice.id && (pickerRole.ttsEngine || "local") !== "azure";
+    const sameEmotion = isAzureVoice
+      ? (pickerRole.defaultEmotion || "") === selectedEmotion
+      : selectedEmotion && pickerRole.defaultEmotion === selectedEmotion;
+    if (sameVoice && sameEmotion) {
+      selectBtn.classList.add("is-selected");
     }
+    selectBtn.textContent = sameVoice && sameEmotion ? `已用于 ${pickerRoleName}` : `选给 ${pickerRoleName}`;
+    selectBtn.disabled = sameVoice && sameEmotion;
+    selectBtn.addEventListener("click", () => {
+      assignVoiceToRole(pickerRole.id, voice.id, selectedEmotion);
+      closeVoiceCenterModal();
+    });
+    actions.append(selectBtn);
+  }
 
   card.append(head, meta, badgeRow, chips, previewStatus, player, actions);
     els.voiceCenterList.append(card);
@@ -2502,6 +3981,7 @@ function updateVoiceCenterCard(voiceId) {
   const cached = voiceViewCache.get(voiceId);
   const voice = getVoiceById(voiceId);
   if (!cached?.node || !voice) return false;
+  if (voice.source === "azure") return false;
 
   const playbackSnapshot = snapshotVoicePreviewPlayback();
   const oldNode = cached.node;
@@ -2537,56 +4017,77 @@ function updateVoiceCenterCard(voiceId) {
     }
   });
 
-  const nameInput = document.createElement("input");
-  nameInput.className = "voice-name-input";
-  nameInput.type = "text";
-  nameInput.value = voice.name;
-  nameInput.placeholder = "基础音色名称";
-  nameInput.addEventListener("input", (event) => {
-    voice.name = event.target.value;
-  });
-  nameInput.addEventListener("change", async (event) => {
-    const target = event.target;
-    if (!(target instanceof HTMLInputElement)) return;
-    const previousName = voice.name;
-    try {
-      target.disabled = true;
-      const savedName = await renameVoiceOnServer(voice, target.value);
-      target.value = savedName;
-    } catch (error) {
-      voice.name = previousName;
-      target.value = previousName;
-      showToast(error.message, true);
-    } finally {
-      target.disabled = false;
-    }
-  });
+  let nameNode;
+  if (state.auth.isOwner) {
+    const nameInput = document.createElement("input");
+    nameInput.className = "voice-name-input";
+    nameInput.type = "text";
+    nameInput.value = voice.name;
+    nameInput.placeholder = "基础音色名称";
+    nameInput.disabled = isVoicePreviewBusy(voice);
+    nameInput.title = isVoicePreviewBusy(voice) ? "试听生成或清理期间不能修改音色名称" : "";
+    nameInput.addEventListener("input", (event) => {
+      if (isVoicePreviewBusy(voice)) return;
+      voice.name = event.target.value;
+    });
+    nameInput.addEventListener("change", async (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      if (isVoicePreviewBusy(voice)) {
+        target.value = voice.name;
+        showToast("试听生成或清理期间不能修改音色名称。", true);
+        return;
+      }
+      const previousName = voice.name;
+      try {
+        target.disabled = true;
+        const savedName = await renameVoiceOnServer(voice, target.value);
+        target.value = savedName;
+      } catch (error) {
+        voice.name = previousName;
+        target.value = previousName;
+        showToast(error.message, true);
+      } finally {
+        target.disabled = isVoicePreviewBusy(voice);
+      }
+    });
+    nameNode = nameInput;
+  } else {
+    nameNode = document.createElement("div");
+    nameNode.className = "voice-name-display";
+    nameNode.textContent = voice.name || "基础音色";
+  }
 
-  const removeBtn = document.createElement("button");
-  removeBtn.type = "button";
-  removeBtn.className = "icon danger";
-  removeBtn.textContent = "×";
-  removeBtn.title = voice.canDelete ? "删除音色" : "这个共享音色由本机管理员维护，不能删除";
-  removeBtn.disabled = !voice.canDelete;
-  removeBtn.addEventListener("click", async () => {
-    if (!voice.canDelete) {
-      showToast("这个共享音色由本机管理员维护，不能删除。", true);
-      return;
-    }
-    try {
-      removeBtn.disabled = true;
-      await deleteVoiceOnServer(voice);
-    } catch (error) {
-      removeBtn.disabled = false;
-      showToast(error.message, true);
-    }
-  });
+  head.append(avatar, nameNode);
 
-  head.append(avatar, nameInput, removeBtn);
+  if (voice.canDelete) {
+    const removeBtn = document.createElement("button");
+    removeBtn.type = "button";
+    removeBtn.className = "icon danger";
+    removeBtn.textContent = "×";
+    removeBtn.title = "删除音色";
+    removeBtn.addEventListener("click", async () => {
+      if (!(await confirmDelete(`确定删除音色“${voice.name || "基础音色"}”？`))) return;
+      try {
+        removeBtn.disabled = true;
+        await deleteVoiceOnServer(voice);
+      } catch (error) {
+        removeBtn.disabled = false;
+        showToast(error.message, true);
+      }
+    });
+    head.append(removeBtn);
+  }
 
   const meta = document.createElement("div");
   meta.className = "voice-card-meta";
-  meta.textContent = voice.audioFile || "未上传参考音频";
+  if (voice.audioExists === false) {
+    meta.classList.add("missing");
+    meta.textContent = voice.audioMissingReason || "参考音频不存在或为空，请重新上传";
+  } else {
+    meta.classList.add("hidden");
+    meta.textContent = "";
+  }
 
   const badgeRow = document.createElement("div");
   badgeRow.className = "voice-card-badges";
@@ -2594,6 +4095,37 @@ function updateVoiceCenterCard(voiceId) {
   scopeBadge.className = `voice-badge ${voice.isShared ? "shared" : "owned"}`;
   scopeBadge.textContent = getVoiceScopeLabel(voice);
   badgeRow.append(scopeBadge);
+  const attrLabel = getVoiceAttributeLabel(voice);
+  if (attrLabel) {
+    const attrBadge = document.createElement("span");
+    attrBadge.className = "voice-badge attributes";
+    attrBadge.textContent = attrLabel;
+    badgeRow.append(attrBadge);
+  }
+  const anyPreview = getAnyVoicePreview(voice);
+  const openFilesBtn = document.createElement("button");
+  openFilesBtn.type = "button";
+  openFilesBtn.className = `voice-preview-file-btn${anyPreview?.audioUrl ? "" : " placeholder"}`;
+  openFilesBtn.textContent = "文件";
+  openFilesBtn.title = anyPreview?.audioUrl ? "查看这个音色已缓存的试听文件" : "还没有缓存试听文件";
+  openFilesBtn.disabled = !anyPreview?.audioUrl;
+  openFilesBtn.addEventListener("click", () => {
+    if (!anyPreview?.audioUrl) return;
+    openVoicePreviewFilesModal(voice.id);
+  });
+  badgeRow.append(openFilesBtn);
+  if (state.auth.isOwner) {
+    const attrBtn = document.createElement("button");
+    attrBtn.type = "button";
+    attrBtn.className = "voice-preview-file-btn voice-attributes-btn";
+    attrBtn.textContent = "✎";
+    attrBtn.setAttribute("aria-label", "编辑音色属性");
+    attrBtn.title = "设置性别、年龄阶段和语言";
+    attrBtn.addEventListener("click", () => {
+      openVoiceAttributesModal(voice.id);
+    });
+    badgeRow.append(attrBtn);
+  }
 
   const player = document.createElement("audio");
   player.dataset.voicePlayer = voice.id;
@@ -2601,25 +4133,38 @@ function updateVoiceCenterCard(voiceId) {
 
   const previewStatus = document.createElement("div");
   previewStatus.className = "voice-preview-status";
+  const cachedPreview = getCachedVoicePreview(voice);
 
-  if (voice.previewBatchPending && voice.previewPendingEmotion) {
+  if (voice.audioExists === false) {
+    player.controls = false;
+    player.classList.add("hidden");
+    previewStatus.classList.add("error");
+    previewStatus.textContent = voice.audioMissingReason || "参考音频不存在或为空，请重新上传这个基础音色。";
+  } else if (voice.previewBatchPending && voice.previewPendingEmotion) {
     player.controls = false;
     player.classList.add("hidden");
     previewStatus.classList.add("loading");
     previewStatus.textContent = `正在批量生成试听 ${voice.previewBatchCurrentIndex}/${voice.previewBatchTotal}：${formatEmotionLabel(voice.previewPendingEmotion)}...`;
+  } else if (voice.previewBatchPending) {
+    player.controls = false;
+    player.classList.add("hidden");
+    previewStatus.classList.add("loading");
+    previewStatus.textContent = "正在删除旧试听文件...";
   } else if (voice.previewPendingEmotion) {
     player.controls = false;
     player.classList.add("hidden");
     previewStatus.classList.add("loading");
     previewStatus.textContent = `正在加载${formatEmotionLabel(voice.previewPendingEmotion)}试听...`;
   } else {
-    player.controls = true;
-    previewStatus.textContent = voice.previewActiveEmotion
+    player.controls = false;
+    player.classList.add("hidden");
+    previewStatus.textContent = voice.previewActiveEmotion && cachedPreview?.audioUrl
       ? `已缓存${formatEmotionLabel(voice.previewActiveEmotion)}试听，下次可直接播放。`
-      : "选择一个情绪后会生成试听，并自动缓存到本地。";
+      : voice.previewActiveEmotion
+      ? `${formatEmotionLabel(voice.previewActiveEmotion)}试听文件不存在，点击情绪按钮重新生成。`
+      : "";
   }
 
-  const cachedPreview = getCachedVoicePreview(voice);
   const playerSource = !voice.previewPendingEmotion
     ? (cachedPreview?.audioUrl || voice.previewActiveUrl || "")
     : "";
@@ -2627,6 +4172,9 @@ function updateVoiceCenterCard(voiceId) {
   if (playerSource) {
     player.src = playerSource;
     player.load();
+  } else if (!voice.previewPendingEmotion && voice.audioExists !== false) {
+    player.controls = false;
+    player.classList.add("hidden");
   }
 
   player.addEventListener("error", async () => {
@@ -2636,34 +4184,11 @@ function updateVoiceCenterCard(voiceId) {
     voice.previewActiveUrl = "";
     delete voice.previews?.[cachedPreviewOnError.emotionPreset];
     saveState();
+    voice.previewActiveEmotion = cachedPreviewOnError.emotionPreset;
     updateVoiceCenterCard(voice.id);
-    try {
-      await previewVoiceEmotion(voice.id, cachedPreviewOnError.emotionPreset, { autoplay: false });
-    } catch (_) {
-      // previewVoiceEmotion already surfaces the error.
-    }
   });
 
-  const chips = document.createElement("div");
-  chips.className = "voice-emotion-chips";
-
-  state.emotionPresets.forEach((preset) => {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "voice-emotion-chip";
-    chip.textContent = formatEmotionLabel(preset);
-    if (voice.previewActiveEmotion === preset) {
-      chip.classList.add("active");
-    }
-    if (voice.previewPendingEmotion === preset || voice.previewBatchPending) {
-      chip.disabled = true;
-      chip.textContent = voice.previewPendingEmotion === preset ? `${formatEmotionLabel(preset)}...` : formatEmotionLabel(preset);
-    }
-    chip.addEventListener("click", () => {
-      previewVoiceEmotion(voice.id, preset);
-    });
-    chips.append(chip);
-  });
+  const chips = buildVoiceEmotionChips(voice);
 
   const actions = document.createElement("div");
   actions.className = "voice-card-actions";
@@ -2672,10 +4197,16 @@ function updateVoiceCenterCard(voiceId) {
     const selectBtn = document.createElement("button");
     selectBtn.type = "button";
     selectBtn.className = "primary";
-    selectBtn.textContent = pickerRole.voiceId === voice.id ? `已用于 ${pickerRoleName}` : `选给 ${pickerRoleName}`;
-    selectBtn.disabled = pickerRole.voiceId === voice.id;
+    const selectedEmotion = voice.previewActiveEmotion || "";
+    const sameVoice = pickerRole.voiceId === voice.id;
+    const sameEmotion = selectedEmotion && pickerRole.defaultEmotion === selectedEmotion;
+    if (sameVoice && sameEmotion) {
+      selectBtn.classList.add("is-selected");
+    }
+    selectBtn.textContent = sameVoice && sameEmotion ? `已用于 ${pickerRoleName}` : `选给 ${pickerRoleName}`;
+    selectBtn.disabled = sameVoice && sameEmotion;
     selectBtn.addEventListener("click", () => {
-      assignVoiceToRole(pickerRole.id, voice.id);
+      assignVoiceToRole(pickerRole.id, voice.id, selectedEmotion);
       closeVoiceCenterModal();
     });
     actions.append(selectBtn);
@@ -2697,8 +4228,13 @@ function updateVoiceCenterCard(voiceId) {
 
 function renderRoles() {
   els.roleList.innerHTML = "";
+  ensureRoleCategoryTabsUI();
+  renderCategoryTabs(els.roleCategoryTabs, state.roleCategoryFilter, (value) => {
+    state.roleCategoryFilter = value;
+    renderRoles();
+  });
 
-  state.roles.forEach((role) => {
+  state.roles.filter((role) => roleMatchesCategory(role, state.roleCategoryFilter)).forEach((role) => {
     const resolvedRole = getResolvedRole(role);
     const node = els.roleTemplate.content.firstElementChild.cloneNode(true);
     node.querySelectorAll("audio").forEach((element) => element.remove());
@@ -2712,8 +4248,9 @@ function renderRoles() {
     const toggleBtn = document.createElement("button");
     toggleBtn.type = "button";
     toggleBtn.className = isExpanded ? "icon danger role-toggle-btn role-toggle-collapse" : "secondary role-toggle-btn";
-    toggleBtn.textContent = isExpanded ? "×" : "修改";
+    toggleBtn.textContent = isExpanded ? "" : "修改";
     toggleBtn.title = isExpanded ? "折叠角色设置" : "展开角色设置";
+    toggleBtn.setAttribute("aria-label", toggleBtn.title);
     toggleBtn.addEventListener("click", () => {
       if (expandedRoleIds.has(role.id)) {
         expandedRoleIds.delete(role.id);
@@ -2736,6 +4273,17 @@ function renderRoles() {
     const voiceMeta = roleMetaBlocks[0];
     voiceMeta.innerHTML = "";
 
+    const compactVoiceBtn = document.createElement("button");
+    compactVoiceBtn.type = "button";
+    compactVoiceBtn.className = "role-compact-voice";
+    compactVoiceBtn.title = resolvedRole.ttsEngine === "azure"
+      ? `当前音色：${resolvedRole.voiceName}${resolvedRole.defaultEmotion ? ` / ${formatAzureStyleLabel(resolvedRole.defaultEmotion)}` : ""}`
+      : (resolvedRole.voiceName ? `当前基础音色：${resolvedRole.voiceName}` : "点击从音色中心选择基础音色");
+    compactVoiceBtn.innerHTML = `<span>${resolvedRole.ttsEngine === "azure" ? `${resolvedRole.voiceName || "Azure TTS"}${resolvedRole.defaultEmotion ? ` / ${formatAzureStyleLabel(resolvedRole.defaultEmotion)}` : ""}` : (resolvedRole.voiceName || "未选择音色")}</span>`;
+    compactVoiceBtn.addEventListener("click", () => {
+      openVoiceCenterModal(role.id);
+    });
+
     const voiceField = document.createElement("div");
     voiceField.className = "role-voice-field grow";
 
@@ -2749,7 +4297,7 @@ function renderRoles() {
     voiceSummary.title = resolvedRole.voiceName || "点击修改基础音色";
     voiceSummary.innerHTML = `
       <strong>${resolvedRole.voiceName || "未选择基础音色"}</strong>
-      <em>${resolvedRole.audioFile ? "点击修改当前基础音色" : "点击从音色中心选择"}</em>
+      <em>${resolvedRole.ttsEngine === "azure" ? "微软/Azure" : (resolvedRole.audioFile ? "本地音色" : "点击从音色中心选择")}</em>
     `;
     voiceSummary.addEventListener("click", () => {
       openVoiceCenterModal(role.id);
@@ -2771,11 +4319,12 @@ function renderRoles() {
 
     nameInput.value = role.name;
 
-    state.emotionPresets.forEach((preset) => {
+    role.defaultEmotion = normalizeEmotionForRole(resolvedRole, role.defaultEmotion || "");
+    getRoleEmotionOptions(resolvedRole).forEach((preset) => {
       const option = document.createElement("option");
-      option.value = preset;
-      option.textContent = formatEmotionLabel(preset);
-      option.selected = preset === role.defaultEmotion;
+      option.value = preset.value;
+      option.textContent = preset.label;
+      option.selected = preset.value === role.defaultEmotion;
       emotionSelect.append(option);
     });
 
@@ -2788,6 +4337,7 @@ function renderRoles() {
 
     emotionSelect.addEventListener("change", (event) => {
       role.defaultEmotion = event.target.value;
+      role.azureStyle = resolvedRole.ttsEngine === "azure" ? role.defaultEmotion : "";
       saveState();
       renderLines();
     });
@@ -2805,7 +4355,8 @@ function renderRoles() {
       showToast(`已把“${role.name}”的默认情绪同步到 ${updatedCount} 条对白。`);
     });
 
-    removeBtn.addEventListener("click", () => {
+    removeBtn.addEventListener("click", async () => {
+      if (!(await confirmDelete(`确定删除角色“${role.name || "未命名角色"}”？`))) return;
       expandedRoleIds.delete(role.id);
       const removedVoiceId = role.voiceId;
       state.roles = state.roles.filter((item) => item.id !== role.id);
@@ -2820,12 +4371,15 @@ function renderRoles() {
     });
 
     if (isExpanded) {
+      node.classList.add("is-expanded");
       roleTop.insertBefore(roleAvatar, nameInput);
       roleTop.insertBefore(toggleBtn, removeBtn);
       roleMetaBlocks.forEach((block) => block.classList.remove("hidden"));
       removeBtn.classList.remove("hidden");
     } else {
+      node.classList.add("is-collapsed");
       roleTop.insertBefore(roleAvatar, nameInput);
+      roleTop.append(compactVoiceBtn);
       roleTop.append(toggleBtn);
       roleMetaBlocks.forEach((block) => block.classList.add("hidden"));
       removeBtn.classList.add("hidden");
@@ -2859,6 +4413,16 @@ function renderLines() {
     const removeBtn = node.querySelector(".remove-line");
     const status = node.querySelector(".line-status");
     const audio = node.querySelector(".line-audio");
+    audio.controls = false;
+    audio.addEventListener("play", () => {
+      refreshLineViews([line]);
+    });
+    audio.addEventListener("pause", () => {
+      refreshLineViews([line]);
+    });
+    audio.addEventListener("ended", () => {
+      stopRenderedLine(line.id);
+    });
 
     const audioSettingsRow = document.createElement("div");
     audioSettingsRow.className = "line-audio-settings";
@@ -2936,11 +4500,13 @@ function renderLines() {
       roleSelect.append(option);
     });
 
-    state.emotionPresets.forEach((preset) => {
+    const currentRole = getResolvedRoleById(line.roleId);
+    line.emotionPreset = normalizeEmotionForRole(currentRole, line.emotionPreset || currentRole?.defaultEmotion || "");
+    getRoleEmotionOptions(currentRole).forEach((preset) => {
       const option = document.createElement("option");
-      option.value = preset;
-      option.textContent = formatEmotionLabel(preset);
-      option.selected = preset === line.emotionPreset;
+      option.value = preset.value;
+      option.textContent = preset.label;
+      option.selected = preset.value === line.emotionPreset;
       emotionSelect.append(option);
     });
 
@@ -2993,11 +4559,11 @@ function renderLines() {
     roleSelect.addEventListener("change", (event) => {
       line.roleId = event.target.value;
       const role = getResolvedRoleById(line.roleId);
-      if (line.emotionMode === "preset" && !line.emotionPreset) {
-        line.emotionPreset = role?.defaultEmotion || state.emotionPresets[0] || "平静";
+      if (line.emotionMode === "preset") {
+        line.emotionPreset = normalizeEmotionForRole(role, role?.defaultEmotion || line.emotionPreset || "");
       }
       saveState();
-      refreshRow();
+      renderLines();
     });
 
     modeSelect.addEventListener("change", (event) => {
@@ -3087,7 +4653,11 @@ function renderLines() {
           return;
         }
         if (role && !isLineDirty(line, role) && line.generatedUrl) {
-          await audio.play();
+          if (!audio.paused && !audio.ended) {
+            stopRenderedLine(line.id);
+            return;
+          }
+          await playRenderedLine(line.id);
           return;
         }
 
@@ -3254,6 +4824,9 @@ function renderAll() {
   ensureLanShareUI();
   renderLanShare();
   renderVoiceCenter();
+  if (els.voicePreviewFilesModal && !els.voicePreviewFilesModal.classList.contains("hidden")) {
+    renderVoicePreviewFilesModal();
+  }
   renderRoles();
   renderLines();
   renderMergeResult();
@@ -3275,11 +4848,12 @@ async function initConfig() {
   state.emotionPresets = config.emotionPresets || [];
   state.settings = { ...state.settings, ...(config.defaultSettings || {}), ...(state.settings || {}) };
   state.lanShare = { ...state.lanShare, ...(config.lanShare || {}) };
+  state.azureTts = { ...state.azureTts, ...(config.azureTts || {}) };
 }
 
 function ensureSeedData() {
   if (!state.roles.length) {
-    state.roles.push(createRole({ name: "鏃佺櫧" }));
+    state.roles.push(createRole({ name: "新角色" }));
   }
   if (!state.lines.length) {
     state.lines.push(createLine({
@@ -3494,7 +5068,7 @@ function importProject(file) {
 }
 
 function insertDemo() {
-  const narrator = state.roles[0] || createRole({ name: "鏃佺櫧" });
+  const narrator = state.roles[0] || createRole({ name: "新角色" });
   if (!state.roles.length) {
     state.roles.push(narrator);
   }
@@ -3529,6 +5103,29 @@ function completeCloseCurrentProject() {
   saveState({ skipProjectSync: true });
   renderAll();
   showToast("当前项目已关闭并保存。");
+}
+
+function completeNewProject() {
+  resetWorkspace({ keepProjectIdentity: false });
+  ensureSeedData();
+  saveState({ skipProjectSync: true });
+  renderAll();
+  renderProjectManager();
+  showToast("已新建项目。");
+}
+
+function newProject() {
+  syncSettingsFromForm();
+  if (!isWorkspaceMeaningful()) {
+    completeNewProject();
+    return;
+  }
+  if (state.currentProjectName.trim()) {
+    saveCurrentProject();
+    completeNewProject();
+    return;
+  }
+  openSaveProjectModal({ closeAfterSave: true });
 }
 
 function saveCurrentProject({ closeAfterSave = false } = {}) {
@@ -3649,6 +5246,9 @@ function bindEvents() {
   ensureAuthEntryUI();
   ensureLanShareUI();
   ensureVoiceCenterUI();
+  ensureRoleManagerUI();
+  ensureVoiceAttributesUI();
+  ensureDeleteConfirmUI();
   removeLegacySettingsSliders();
 
   els.toggleLanShareBtn?.addEventListener("click", () => {
@@ -3714,6 +5314,58 @@ function bindEvents() {
 
   els.openProjectManagerBtn.addEventListener("click", () => {
     openProjectManagerModal();
+  });
+
+  els.newProjectBtn?.addEventListener("click", () => {
+    newProject();
+  });
+
+  els.roleManagerBtn?.addEventListener("click", () => {
+    openRoleManagerModal();
+  });
+
+  els.closeRoleManagerModalBtn?.addEventListener("click", () => {
+    closeRoleManagerModal();
+  });
+
+  els.roleManagerModal?.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.closeModal === "role-manager") {
+      closeRoleManagerModal();
+    }
+  });
+
+  els.roleManagerCategoryFilter?.addEventListener("change", () => {
+    state.roleManagerCategoryFilter = els.roleManagerCategoryFilter?.value || "__all__";
+    renderRoleManagerModal();
+  });
+
+  els.roleManagerSelectAll?.addEventListener("click", () => {
+    toggleRoleManagerSelectAll();
+  });
+
+  els.roleManagerAssignBtn?.addEventListener("click", () => {
+    assignSelectedRolesToCategory();
+  });
+
+  els.saveRoleManagerBtn?.addEventListener("click", () => {
+    saveRoleManagerCategories();
+  });
+
+  els.exportRolesBtn?.addEventListener("click", () => {
+    exportRoles("");
+  });
+
+  els.exportRoleCategoryBtn?.addEventListener("click", () => {
+    const filter = state.roleManagerCategoryFilter || "__all__";
+    exportRoles(filter === "__all__" ? "" : filter);
+  });
+
+  els.importRolesBtn?.addEventListener("click", () => {
+    els.importRolesInput?.click();
+  });
+
+  els.importRolesInput?.addEventListener("change", (event) => {
+    importRolesFile(event.target.files?.[0]);
   });
 
   els.saveCurrentProjectBtn.addEventListener("click", () => {
@@ -3808,8 +5460,33 @@ function bindEvents() {
     openVoiceCenterModal();
   });
 
+  els.voiceSearchInput?.addEventListener("input", () => {
+    renderVoiceCenter();
+  });
+
+  [els.voiceSourceFilterGroup, els.voiceEmotionModeFilterGroup, els.voiceGenderFilterGroup, els.voiceAgeFilterGroup, els.voiceLanguageFilterGroup].forEach((group) => {
+    group?.addEventListener("click", (event) => {
+      const button = event.target instanceof HTMLElement ? event.target.closest(".voice-filter-pill") : null;
+      if (!(button instanceof HTMLButtonElement)) return;
+      updateVoiceFilterPills(button.dataset.filterName || "", button.dataset.filterValue || "");
+      renderVoiceCenter();
+    });
+  });
+
   els.closeVoiceCenterModalBtn.addEventListener("click", () => {
     closeVoiceCenterModal();
+  });
+
+  els.closeVoiceAttributesModalBtn?.addEventListener("click", () => {
+    closeVoiceAttributesModal();
+  });
+
+  els.cancelVoiceAttributesBtn?.addEventListener("click", () => {
+    closeVoiceAttributesModal();
+  });
+
+  els.saveVoiceAttributesBtn?.addEventListener("click", () => {
+    saveVoiceAttributes();
   });
 
   els.scriptImportModal.addEventListener("click", (event) => {
@@ -3858,6 +5535,36 @@ function bindEvents() {
     if (event.target instanceof HTMLElement && event.target.dataset.closeModal === "voice-center") {
       closeVoiceCenterModal();
     }
+  });
+
+  els.closeVoicePreviewFilesModalBtn?.addEventListener("click", () => {
+    closeVoicePreviewFilesModal();
+  });
+
+  els.voicePreviewFilesModal?.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.closeModal === "voice-preview-files") {
+      closeVoicePreviewFilesModal();
+    }
+  });
+
+  els.voiceAttributesModal?.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.closeModal === "voice-attributes") {
+      closeVoiceAttributesModal();
+    }
+  });
+
+  els.deleteConfirmModal?.addEventListener("click", (event) => {
+    if (event.target instanceof HTMLElement && event.target.dataset.closeModal === "delete-confirm") {
+      closeDeleteConfirmModal(false);
+    }
+  });
+
+  els.cancelDeleteConfirmBtn?.addEventListener("click", () => {
+    closeDeleteConfirmModal(false);
+  });
+
+  els.confirmDeleteConfirmBtn?.addEventListener("click", () => {
+    closeDeleteConfirmModal(true);
   });
 
   els.quickAddLineBtn.addEventListener("click", () => {
@@ -3911,12 +5618,28 @@ function bindEvents() {
 
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
+    if (els.deleteConfirmModal && !els.deleteConfirmModal.classList.contains("hidden")) {
+      closeDeleteConfirmModal(false);
+      return;
+    }
     if (!els.downloadListModal.classList.contains("hidden")) {
       closeDownloadListModal();
       return;
     }
+    if (els.voiceAttributesModal && !els.voiceAttributesModal.classList.contains("hidden")) {
+      closeVoiceAttributesModal();
+      return;
+    }
     if (els.voiceCenterModal && !els.voiceCenterModal.classList.contains("hidden")) {
       closeVoiceCenterModal();
+      return;
+    }
+    if (els.roleManagerModal && !els.roleManagerModal.classList.contains("hidden")) {
+      closeRoleManagerModal();
+      return;
+    }
+    if (els.voicePreviewFilesModal && !els.voicePreviewFilesModal.classList.contains("hidden")) {
+      closeVoicePreviewFilesModal();
       return;
     }
     if (els.pronunciationModal && !els.pronunciationModal.classList.contains("hidden")) {
@@ -3999,6 +5722,14 @@ function bindEvents() {
       closeVoiceCenterModal();
       return;
     }
+    if (els.roleManagerModal && !els.roleManagerModal.classList.contains("hidden")) {
+      closeRoleManagerModal();
+      return;
+    }
+    if (els.voicePreviewFilesModal && !els.voicePreviewFilesModal.classList.contains("hidden")) {
+      closeVoicePreviewFilesModal();
+      return;
+    }
     if (!els.saveProjectModal.classList.contains("hidden")) {
       closeSaveProjectModal();
       return;
@@ -4034,6 +5765,7 @@ async function boot() {
     await initConfig();
     loadState();
     ensureSeedData();
+    initLayoutResize();
     bindEvents();
     await fetchAuthStatus();
     if (!state.auth.requireAuth || state.auth.authenticated) {

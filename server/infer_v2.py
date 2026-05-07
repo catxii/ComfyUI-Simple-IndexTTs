@@ -579,6 +579,8 @@ class IndexTTS2:
         num_beams = generation_kwargs.pop("num_beams", 3)
         repetition_penalty = generation_kwargs.pop("repetition_penalty", 10.0)
         max_mel_tokens = generation_kwargs.pop("max_mel_tokens", 1500)
+        diffusion_steps = int(generation_kwargs.pop("diffusion_steps", 25))
+        diffusion_steps = max(4, min(25, diffusion_steps))
         sampling_rate = 22050
 
         wavs = []
@@ -699,8 +701,7 @@ class IndexTTS2:
                         seg_base + seg_step * 0.55,
                         f"acoustic decoding {seg_idx + 1}/{segments_count}...",
                     )
-                    # Default back to the higher-quality diffusion setting.
-                    diffusion_steps = 25
+                    # Keep full-quality decoding by default; callers can lower this for previews.
                     inference_cfg_rate = 0.7
                     latent = self.s2mel.models['gpt_layer'](latent)
                     S_infer = self.semantic_codec.quantizer.vq2emb(codes.unsqueeze(1))

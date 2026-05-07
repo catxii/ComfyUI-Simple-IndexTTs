@@ -1,6 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
+import html
 import importlib
 import json
 import hashlib
@@ -13,6 +14,9 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from urllib import error as urllib_error
+from urllib import request as urllib_request
+from urllib.parse import quote
 
 import folder_paths
 import librosa
@@ -36,6 +40,7 @@ VOICE_PREVIEW_DIR = Path(folder_paths.get_output_directory()) / "indextts_ui" / 
 LOCAL_DATA_DIR = BASE_DIR / "_runtime" / "local_data"
 ACCOUNTS_PATH = LOCAL_DATA_DIR / "accounts.json"
 VOICES_PATH = LOCAL_DATA_DIR / "voices.json"
+AZURE_TTS_CONFIG_PATH = LOCAL_DATA_DIR / "azure_tts.json"
 DEFAULT_CFG_PATH = Path(folder_paths.models_dir) / "indextts" / "config.yaml"
 DEFAULT_MODEL_DIR = Path(folder_paths.models_dir) / "indextts"
 
@@ -59,6 +64,10 @@ LAN_SHARE_STATE: dict[str, object] = {
     "error": None,
     "startedAt": None,
 }
+VOICE_GENDERS = {"", "男", "女"}
+VOICE_AGE_GROUPS = {"", "儿童", "年轻人", "中年人", "老年人"}
+VOICE_LANGUAGES = {"", "中文", "英文", "日文", "韩文", "粤语", "中英双语", "多语言"}
+VOICE_EMOTION_MODES = {"", "默认", "多情绪"}
 LAN_SHARE_RUNTIME: dict[str, object] = {
     "thread": None,
     "loop": None,
@@ -85,6 +94,129 @@ def save_json_file(path: Path, payload) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def sanitize_voice_attributes(value: dict | None) -> dict[str, str]:
+    attrs = value if isinstance(value, dict) else {}
+    gender = str(attrs.get("gender") or "").strip()
+    age_group = str(attrs.get("ageGroup") or "").strip()
+    language = str(attrs.get("language") or "").strip()
+    emotion_mode = str(attrs.get("emotionMode") or "").strip()
+    return {
+        "gender": gender if gender in VOICE_GENDERS else "",
+        "ageGroup": age_group if age_group in VOICE_AGE_GROUPS else "",
+        "language": language if language in VOICE_LANGUAGES else "中文",
+        "emotionMode": emotion_mode if emotion_mode in VOICE_EMOTION_MODES else "默认",
+    }
+
+
+def load_azure_tts_config() -> dict[str, object]:
+    config = load_json_file(AZURE_TTS_CONFIG_PATH, {})
+    region = str(os.environ.get("AZURE_SPEECH_REGION") or config.get("region") or "eastus").strip()
+    key = str(os.environ.get("AZURE_SPEECH_KEY") or config.get("key") or "").strip()
+    return {
+        "enabled": bool(config.get("enabled") and key and region),
+        "configured": bool(key and region),
+        "key": key,
+        "region": region,
+        "endpoint": str(os.environ.get("AZURE_SPEECH_ENDPOINT") or config.get("endpoint") or "").strip(),
+        "defaultVoice": str(config.get("defaultVoice") or "zh-CN-XiaoxiaoNeural").strip(),
+        "outputFormat": str(config.get("outputFormat") or "riff-24khz-16bit-mono-pcm").strip(),
+        "voices": config.get("voices") or [],
+    }
+
+
+def save_azure_tts_config(config: dict[str, object]) -> None:
+    current = load_json_file(AZURE_TTS_CONFIG_PATH, {})
+    current.update({key: value for key, value in config.items() if key not in {"configured"}})
+    save_json_file(AZURE_TTS_CONFIG_PATH, current)
+
+
+def get_azure_preview_key(style: str = "") -> str:
+    return style or "__default__"
+
+
+def get_azure_tts_endpoint(config: dict[str, object]) -> str:
+    return f"https://{str(config.get('region') or 'eastus').strip()}.tts.speech.microsoft.com/cognitiveservices/v1"
+
+
+def find_azure_voice_config(short_name: str) -> tuple[dict[str, object], int, dict[str, object]]:
+    config = load_azure_tts_config()
+    voices = [voice for voice in config.get("voices") or [] if isinstance(voice, dict)]
+    for index, voice in enumerate(voices):
+        if str(voice.get("name") or voice.get("shortName") or "") == short_name:
+            return config, index, voice
+    raise web.HTTPNotFound(text="Azure voice not found")
+
+
+def get_azure_voice_styles(config: dict[str, object], voice_name: str) -> list[str]:
+    for voice in config.get("voices") or []:
+        if isinstance(voice, dict) and str(voice.get("name") or voice.get("shortName") or "") == voice_name:
+            return [str(style) for style in voice.get("styles") or [] if str(style or "").strip()]
+    return []
+
+
+def resolve_azure_style(config: dict[str, object], voice_name: str, role: dict, line: dict | None = None) -> str:
+    supported = set(get_azure_voice_styles(config, voice_name))
+    preset = str((line or {}).get("emotionPreset") or "").strip()
+    if preset and preset in supported:
+        return preset
+    requested = str(role.get("azureStyle") or "").strip()
+    if requested and requested in supported:
+        return requested
+    preset_map = {
+        "温柔": ["affectionate", "comforting", "empathetic", "gentle"],
+        "开心": ["cheerful", "happy"],
+        "激动": ["excited"],
+        "生气": ["angry"],
+        "悲伤": ["sad", "sentimental", "lonely"],
+        "惊讶": ["surprised"],
+        "癫狂": ["excited", "angry"],
+    }
+    for style in preset_map.get(preset, []):
+        if style in supported:
+            return style
+    return ""
+
+
+def synthesize_azure_tts_to_path(
+    voice_name: str,
+    text: str,
+    output_path: Path,
+    config: dict[str, object] | None = None,
+    style: str = "",
+) -> None:
+    config = config or load_azure_tts_config()
+    if not config.get("configured"):
+        raise ValueError("Azure TTS is not configured with Speech key and region.")
+    inner_text = html.escape(text)
+    if style:
+        inner_text = f'<mstts:express-as style="{html.escape(style, quote=True)}">{inner_text}</mstts:express-as>'
+    ssml = (
+        '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
+        'xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="zh-CN">'
+        f'<voice name="{html.escape(voice_name, quote=True)}">{inner_text}</voice></speak>'
+    )
+    request = urllib_request.Request(
+        get_azure_tts_endpoint(config),
+        data=ssml.encode("utf-8"),
+        headers={
+            "Ocp-Apim-Subscription-Key": str(config.get("key") or ""),
+            "Content-Type": "application/ssml+xml; charset=utf-8",
+            "X-Microsoft-OutputFormat": str(config.get("outputFormat") or "riff-24khz-16bit-mono-pcm"),
+            "User-Agent": "ComfyUI-Simple-IndexTTS",
+        },
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=60) as response:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(response.read())
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Azure TTS request failed: HTTP {exc.code} {detail}") from exc
+    except urllib_error.URLError as exc:
+        raise RuntimeError(f"Azure TTS connection failed: {exc.reason}") from exc
+
+
 def ensure_local_data_files() -> None:
     LOCAL_DATA_DIR.mkdir(parents=True, exist_ok=True)
     if not ACCOUNTS_PATH.exists():
@@ -103,6 +235,19 @@ def ensure_local_data_files() -> None:
         )
     if not VOICES_PATH.exists():
         save_json_file(VOICES_PATH, {"voices": []})
+    if not AZURE_TTS_CONFIG_PATH.exists():
+        save_json_file(
+            AZURE_TTS_CONFIG_PATH,
+            {
+                "enabled": False,
+                "key": "",
+                "region": "eastus",
+                "endpoint": "",
+                "defaultVoice": "zh-CN-XiaoxiaoNeural",
+                "outputFormat": "riff-24khz-16bit-mono-pcm",
+                "voices": [],
+            },
+        )
     accounts = load_json_file(ACCOUNTS_PATH, {"users": []})
     users = [user for user in accounts.get("users", []) if isinstance(user, dict)]
     if not any(str(user.get("username") or "").lower() == "admin" for user in users):
@@ -264,6 +409,7 @@ def sanitize_voice_record(record: dict, user: dict[str, object]) -> dict[str, ob
         "isShared": bool(record.get("isShared")),
         "isProtected": bool(record.get("isProtected")),
         "canDelete": can_delete,
+        "attributes": sanitize_voice_attributes(record.get("attributes")),
         "previews": preview_payload,
     }
 
@@ -887,6 +1033,44 @@ def run_generation_sync(
     }
 
 
+def run_azure_generation_sync(
+    role: dict,
+    line: dict,
+    settings: dict,
+    line_index: int,
+    task_key: str,
+    progress_callback=None,
+    preview_callback=None,
+    should_cancel=None,
+) -> dict:
+    ensure_webui_dirs()
+    text = preprocess_line_text((line.get("text") or "").strip(), line)
+    if not text:
+        raise ValueError("台词内容不能为空。")
+    if should_cancel and should_cancel():
+        raise GenerationCancelledError("已停止生成")
+    config = load_azure_tts_config()
+    voice_name = str(role.get("azureVoice") or config.get("defaultVoice") or "zh-CN-XiaoxiaoNeural").strip()
+    azure_style = resolve_azure_style(config, voice_name, role, line)
+    if progress_callback:
+        progress_callback(0.1, "calling Azure TTS...")
+    filename = str(Path(create_output_filename(settings.get("outputPrefix", "indextts"), role.get("name", "role"), line_index)).with_suffix(".wav"))
+    output_path = GENERATED_AUDIO_DIR / filename
+    synthesize_azure_tts_to_path(voice_name, text, output_path, config, azure_style)
+    if should_cancel and should_cancel():
+        output_path.unlink(missing_ok=True)
+        raise GenerationCancelledError("已停止生成")
+    apply_audio_settings_to_path(output_path, line.get("audioSettings"))
+    if progress_callback:
+        progress_callback(1.0, "completed")
+    return {
+        "audioFile": filename,
+        "audioUrl": build_public_url("generated", filename),
+        "durationSeconds": round(sf.info(str(output_path)).duration, 2),
+        "previewAudioFile": "",
+    }
+
+
 def run_voice_preview_sync(
     model: IndexTTS2,
     voice: dict,
@@ -1093,6 +1277,11 @@ async def indextts_ui_config(request: web.Request):
                 },
                 "modelStatus": MODEL_STATUS,
                 "lanShare": get_lan_share_state(),
+                "azureTts": {
+                    key: value
+                    for key, value in load_azure_tts_config().items()
+                    if key != "key"
+                },
                 "auth": user,
             }
         )
@@ -1221,7 +1410,6 @@ async def indextts_ui_upload_voice(request: web.Request):
     user = require_authenticated_user(request)
     reader = await request.multipart()
     file_part = await reader.next()
-    name_part = await reader.next()
 
     if file_part is None or file_part.name != "file":
         raise web.HTTPBadRequest(text="Missing audio file field")
@@ -1238,6 +1426,7 @@ async def indextts_ui_upload_voice(request: web.Request):
                 break
             handle.write(chunk)
 
+    name_part = await reader.next()
     voice_name = ""
     if name_part is not None:
         voice_name = (await name_part.text()).strip()
@@ -1277,8 +1466,88 @@ async def indextts_ui_update_voice(request: web.Request):
 
     record = dict(record)
     record["name"] = name
+    if "attributes" in payload:
+        if not user.get("isOwner"):
+            raise web.HTTPForbidden(text="只有管理员可以修改音色属性。")
+        record["attributes"] = sanitize_voice_attributes(payload.get("attributes"))
     upsert_voice_record(record)
     return web.json_response({"voice": sanitize_voice_record(record, user)})
+
+
+@PromptServer.instance.routes.post("/indextts-ui/api/update-azure-voice")
+async def indextts_ui_update_azure_voice(request: web.Request):
+    ensure_webui_dirs()
+    user = require_authenticated_user(request)
+    if not user.get("isOwner"):
+        raise web.HTTPForbidden(text="Only owner can update Azure voice metadata.")
+    payload = await json_request(request)
+    short_name = str(payload.get("shortName") or "").strip()
+    if not short_name:
+        raise web.HTTPBadRequest(text="Missing Azure voice name.")
+    config, index, voice = find_azure_voice_config(short_name)
+    voices = list(config.get("voices") or [])
+    updated = dict(voice)
+    if "label" in payload:
+        label = str(payload.get("label") or "").strip()
+        if not label:
+            raise web.HTTPBadRequest(text="Voice display name cannot be empty.")
+        updated["label"] = label
+    if "attributes" in payload:
+        updated.update(sanitize_voice_attributes(payload.get("attributes")))
+    voices[index] = updated
+    config["voices"] = voices
+    save_azure_tts_config(config)
+    return web.json_response({"voice": updated})
+
+
+@PromptServer.instance.routes.post("/indextts-ui/api/preview-azure-voice")
+async def indextts_ui_preview_azure_voice(request: web.Request):
+    require_authenticated_user(request)
+    ensure_webui_dirs()
+    payload = await json_request(request)
+    short_name = str(payload.get("shortName") or "").strip()
+    if not short_name:
+        raise web.HTTPBadRequest(text="Missing Azure voice name.")
+    config, _, voice = find_azure_voice_config(short_name)
+    style = str(payload.get("style") or "").strip()
+    supported_styles = set(str(item) for item in voice.get("styles") or [])
+    if style and style not in supported_styles:
+        raise web.HTTPBadRequest(text="This Azure voice does not support the selected style.")
+    preview_text = str(payload.get("previewText") or "").strip() or "这是一段微软 Azure 在线语音试听。"
+    style_suffix = f"_{slugify(style, 'default')}" if style else ""
+    preview_name = f"azure/{slugify(short_name, 'azure')}{style_suffix}.wav"
+    preview_path = safe_file_path("voice-previews", preview_name)
+    if not preview_path.exists() or bool(payload.get("forceRegenerate")):
+        await asyncio.to_thread(synthesize_azure_tts_to_path, short_name, preview_text, preview_path, config, style)
+    preview_payload = {
+        "audioFile": preview_name,
+        "audioUrl": build_public_url("voice-previews", preview_name),
+        "durationSeconds": round(sf.info(str(preview_path)).duration, 2),
+        "style": style,
+        "updatedAt": time.time(),
+    }
+    config, index, voice = find_azure_voice_config(short_name)
+    voices = list(config.get("voices") or [])
+    updated_voice = dict(voice)
+    previews = dict(updated_voice.get("previews") or {})
+    previews[get_azure_preview_key(style)] = preview_payload
+    updated_voice["previews"] = previews
+    updated_voice["previewAudioFile"] = preview_payload["audioFile"]
+    updated_voice["previewAudioUrl"] = preview_payload["audioUrl"]
+    updated_voice["previewDurationSeconds"] = preview_payload["durationSeconds"]
+    updated_voice["previewStyle"] = style
+    voices[index] = updated_voice
+    config["voices"] = voices
+    save_azure_tts_config(config)
+    return web.json_response({
+        "audioFile": preview_payload["audioFile"],
+        "audioUrl": preview_payload["audioUrl"],
+        "durationSeconds": preview_payload["durationSeconds"],
+        "shortName": short_name,
+        "style": style,
+        "previews": previews,
+        "label": updated_voice.get("label") or updated_voice.get("localName") or updated_voice.get("displayName") or short_name,
+    })
 
 
 @PromptServer.instance.routes.post("/indextts-ui/api/delete-voice")
@@ -1450,11 +1719,9 @@ async def indextts_ui_generate_line(request: web.Request):
         )
 
     try:
-        model = await get_tts_model(bool(settings.get("localFilesOnly", True)))
-        async with GENERATE_LOCK:
+        if str(role.get("ttsEngine") or "local") == "azure":
             result = await asyncio.to_thread(
-                run_generation_sync,
-                model,
+                run_azure_generation_sync,
                 role,
                 line,
                 settings,
@@ -1464,6 +1731,21 @@ async def indextts_ui_generate_line(request: web.Request):
                 preview_callback,
                 lambda: is_generation_cancel_requested(task_key),
             )
+        else:
+            model = await get_tts_model(bool(settings.get("localFilesOnly", True)))
+            async with GENERATE_LOCK:
+                result = await asyncio.to_thread(
+                    run_generation_sync,
+                    model,
+                    role,
+                    line,
+                    settings,
+                    line_index,
+                    task_key,
+                    progress_callback,
+                    preview_callback,
+                    lambda: is_generation_cancel_requested(task_key),
+                )
     except GenerationCancelledError:
         with GENERATION_TASKS_LOCK:
             task = GENERATION_TASKS.get(task_key) or {}
@@ -1637,7 +1919,7 @@ async def indextts_ui_list_merged_audios(request: web.Request):
     return web.json_response({"items": items})
 
 
-@PromptServer.instance.routes.get("/indextts-ui/api/file/{bucket}/{filename}")
+@PromptServer.instance.routes.get("/indextts-ui/api/file/{bucket}/{filename:.+}")
 async def indextts_ui_file(request: web.Request):
     require_authenticated_user(request)
     bucket = request.match_info["bucket"]
